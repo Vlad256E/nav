@@ -796,7 +796,7 @@ def choose_input_file(cli_file: str | None) -> list[Path]:
             f"В папке {DATA_DIR} нет файлов {DEFAULT_LOG_EXTENSION}"
         )
 
-    return files
+    return [files[0]]
 
 # --- MAIN ---
 if __name__ == '__main__':
