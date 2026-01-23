@@ -8,14 +8,10 @@ from utils import timestamp_to_utc # Импортируем утилиту вр�
 class IcaoGraphs:
     # конструктор класса, вызывается при создании объекта
     def __init__(self, alt_dict, spd_dict, pos_dict, course_dict, adsb_icao_list, icao_callsigns, 
-                 icao_sel_alt, icao_alt_diff, icao_baro_correction, icao_gnss_alt,
-                 icao_airborne_pos_ts, icao_surface_pos_ts, icao_ident_timestamps,
-                 icao_speed_ts, icao_status_ts, icao_target_state_ts, icao_operation_status_ts,
-                 icao_df11_ts):
+                 icao_sel_alt, icao_alt_diff, icao_baro_correction, icao_gnss_alt):
         
         # собираем все icao, по которым есть какие-либо данные
         icao_with_data = set(alt_dict.keys()) | set(spd_dict.keys()) | set(pos_dict.keys()) | set(course_dict.keys()) | set(icao_gnss_alt.keys())
-        icao_with_data = icao_with_data | set(icao_airborne_pos_ts.keys()) | set(icao_df11_ts.keys()) # учитывается DF11
         
         # пересечение: берем только те борта, которые есть в очищенном adsb_icao_list
         self.icao_list = sorted(list(icao_with_data.intersection(adsb_icao_list)))
@@ -36,23 +32,10 @@ class IcaoGraphs:
         self.baro_correction_dict = icao_baro_correction if icao_baro_correction else {} 
         self.gnss_alt_dict = icao_gnss_alt if icao_gnss_alt else {}
         
-        # Данные временных меток для построения гистограмм интервалов
-        self.icao_airborne_pos_ts = icao_airborne_pos_ts
-        self.icao_surface_pos_ts = icao_surface_pos_ts
-        self.icao_ident_timestamps = icao_ident_timestamps
-        self.icao_speed_ts = icao_speed_ts
-        self.icao_status_ts = icao_status_ts
-        self.icao_target_state_ts = icao_target_state_ts
-        self.icao_operation_status_ts = icao_operation_status_ts
-        self.icao_df11_ts = icao_df11_ts # Сохраняем DF11
-        
         self.icao_index = 0
         
-        # список доступных режимов (типов графиков), включая анализ интервалов
-        self.plot_modes = ['all_tracks', 'altitude', 'gnss_altitude', 'speed', 'altitude_speed_combined', 'latitude', 'course', 'track', 'altitude_diff', 'baro_correction',
-                           'df11_msg_intervals', # Новый режим графика
-                           'reg05_msg_intervals', 'reg06_msg_intervals', 'reg08_msg_intervals', 
-                           'reg09_msg_intervals', 'reg61_msg_intervals', 'reg62_msg_intervals', 'reg65_msg_intervals']
+        # список доступных режимов (типов графиков), без анализа интервалов
+        self.plot_modes = ['all_tracks', 'altitude', 'gnss_altitude', 'speed', 'altitude_speed_combined', 'latitude', 'course', 'track', 'altitude_diff', 'baro_correction']
         
         self.plot_mode_idx = 0
         self.ylims = {mode: {} for mode in self.plot_modes}
@@ -71,7 +54,7 @@ class IcaoGraphs:
 
         # создание окна и основной области для рисования
         self.fig, self.ax = plt.subplots(figsize=(12, 7))
-        self.fig.canvas.manager.set_window_title('Графики бортов и анализ интервалов')
+        self.fig.canvas.manager.set_window_title('Графики бортов')
         plt.subplots_adjust(bottom=0.25) # оставляем место снизу для кнопок
         
         self.ax2 = None
@@ -303,11 +286,6 @@ class IcaoGraphs:
                 self.ax.plot(times, values, 'o-', markersize=3, label='Барокоррекция', color='brown')
                 self.ax.axhline(y=1013.25, color='green', linestyle='--', alpha=0.7, label='Стандартное давление (1013.25 гПа)')
 
-        # Обработка режимов гистограмм (вызов вспомогательной функции)
-        elif mode.endswith('_msg_intervals'):
-            self._plot_histogram(mode, icao, display_id)
-            return
-
         # установка заголовка и сетки
         self.ax.set_title(title)
         self.ax.grid(True, linestyle='--', alpha=0.7)
@@ -337,146 +315,6 @@ class IcaoGraphs:
 
         self.fig.canvas.draw_idle()
 
-    # вспомогательная функция для построения гистограмм интервалов сообщений
-    def _plot_histogram(self, mode, icao, display_id):
-        data_source = None
-        color_bar = 'blue'
-        color_out = 'mediumblue'
-        center, dev = 500, 100
-        title_text = ""
-
-        # Выбор источника данных и параметров в зависимости от режима
-        if mode == 'df11_msg_intervals':
-            data_source = self.icao_df11_ts.get(icao)
-            title_text = f"DF11 (Сквиттер захвата): {display_id}"
-            color_bar, color_out = 'gray', 'black'
-            center = 1000 
-            dev = 200 # +/- 200 мс (окно 400 мс)
-        elif mode == 'reg05_msg_intervals':
-            data_source = self.icao_airborne_pos_ts.get(icao)
-            title_text = f"Распределение интервалов сообщений сквиттера местоположения в воздухе (REG05): {display_id}"
-            color_bar, color_out = 'blue', 'mediumblue'
-            center, dev = 500, 100
-        elif mode == 'reg06_msg_intervals':
-            data_source = self.icao_surface_pos_ts.get(icao)
-            title_text = f"Распределение интервалов сообщений сквиттера местоположения на земле (REG06): {display_id}"
-            color_bar, color_out = 'red', 'firebrick'
-            center, dev = 500, 100
-        elif mode == 'reg08_msg_intervals':
-            data_source = self.icao_ident_timestamps.get(icao)
-            title_text = f"Распределение интервалов сообщений сквиттера опознавательного кода (REG08): {display_id}"
-            color_bar, color_out = 'cyan', 'skyblue'
-            center = 5000 
-            dev = 200 # +/- 200 мс (окно 400 мс)
-        elif mode == 'reg09_msg_intervals':
-            data_source = self.icao_speed_ts.get(icao)
-            title_text = f"Распределение интервалов сообщений сквиттера скорости (REG09): {display_id}"
-            color_bar, color_out = 'lime', 'mediumseagreen'
-            center, dev = 500, 100
-        elif mode == 'reg61_msg_intervals':
-            data_source = self.icao_status_ts.get(icao)
-            title_text = f"Распределение интервалов сообщений сквиттера статуса (REG61): {display_id}"
-            color_bar, color_out = 'darkviolet', 'indigo'
-            center = 5000
-            dev = 200 # +/- 200 мс (окно 400 мс)
-        elif mode == 'reg62_msg_intervals':
-            data_source = self.icao_target_state_ts.get(icao)
-            title_text = f"Распределение интервалов сообщений сквиттера состояния и статуса цели (REG62): {display_id}"
-            color_bar, color_out = 'gold', 'darkorange'
-            center = 1250 
-        elif mode == 'reg65_msg_intervals':
-            data_source = self.icao_operation_status_ts.get(icao)
-            title_text = f"Распределение интервалов сообщений сквиттера эксплуатационного статуса (REG65): {display_id}"
-            color_bar, color_out = 'mediumaquamarine', 'lightseagreen'
-            center = 2500
-
-        self.ax.set_ylabel('Количество')
-        self.ax.grid(True, linestyle='--', alpha=0.7)
-
-        # проверка наличия достаточного количества данных
-        if not data_source or len(data_source) < 2:
-            self.ax.set_title(title_text)
-            self.ax.text(0.5, 0.5, "Недостаточно данных для гистограммы", 
-                         ha='center', va='center', transform=self.ax.transAxes)
-            self.fig.canvas.draw_idle()
-            return
-
-        # расчёт интервалов между сообщениями
-        timestamps = np.array(sorted(data_source))
-        intervals = np.diff(timestamps) * 1000
-        intervals = intervals[intervals >= 0]
-
-        if len(intervals) == 0:
-            self.ax.set_title(title_text)
-            self.ax.text(0.5, 0.5, "Нет валидных интервалов", ha='center', va='center', transform=self.ax.transAxes)
-            self.fig.canvas.draw_idle()
-            return
-        
-        # Статистика min/max для заголовка
-        min_val = np.min(intervals)
-        max_val = np.max(intervals)
-        
-        full_title = f"{title_text}\nМин: {min_val:.1f} мс, Макс: {max_val:.1f} мс, Цель: {center} мс"
-        self.ax.set_title(full_title)
-        self.ax.set_xlabel('Интервал между сообщениями (мс)')
-
-        # настройка бинов и разделение данных на группы
-        num_bins = 10
-        low = center - dev
-        high = center + dev
-
-        middle = intervals[(intervals >= low) & (intervals <= high)]
-        left = intervals[intervals < low]
-        right = intervals[intervals > high]
-        
-        bar_width = (high - low) / num_bins
-
-        # отрисовка основного диапазона и "хвостов"
-        self.ax.hist(middle, bins=np.linspace(low, high, num_bins + 1),
-                     alpha=0.6, color=color_bar, edgecolor='black', 
-                     label=f"В диапазоне ({low}-{high}): {len(middle)}")
-
-        # Левый хвост (слишком частые)
-        if len(left) > 0:
-            self.ax.bar(low - bar_width, len(left), width=bar_width, align='edge',
-                        color=color_out, edgecolor='black', hatch='//', label=f"Слишком частые (<{low}): {len(left)}")
-            
-            # Анализ левого хвоста (топ значений)
-            counts, bins = np.histogram(left, bins=5)
-            
-            # Упрощение: вместо сложной сортировки numpy, сделаем более понятный список
-            bin_data = []
-            for i in range(len(counts)):
-                # сохраняем пару: (количество, индекс)
-                bin_data.append((counts[i], i))
-            
-            # сортируем по количеству (по убыванию)
-            bin_data.sort(key=lambda x: x[0], reverse=True)
-            
-            # берем топ 3
-            left_stats = []
-            for count, idx in bin_data[:3]:
-                if count > 0:
-                    bin_center = (bins[idx] + bins[idx+1]) / 2
-                    left_stats.append(f"~{bin_center:.0f}ms: {count}")
-            
-            if left_stats:
-                info_text = "Частые 'быстрые':\n" + "\n".join(left_stats)
-                self.ax.text(0.02, 0.95, info_text, transform=self.ax.transAxes, 
-                             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-
-        # Правый хвост (пропуски)
-        if len(right) > 0:
-            self.ax.bar(high, len(right), width=bar_width, align='edge',
-                        color=color_out, edgecolor='black', label=f"Слишком редкие (>{high}): {len(right)}")
-
-        self.ax.set_xlim(low - bar_width * 2, high + bar_width * 2)
-        self.ax.axvline(low, linestyle='--', color='black', alpha=0.8)
-        self.ax.axvline(high, linestyle='--', color='black', alpha=0.8)
-        
-        self.ax.legend(loc='upper right')
-        self.fig.canvas.draw_idle()
-
     # функция-обработчик для масштабирования колесом мыши
     def on_scroll(self, event):
         if event.inaxes != self.ax: return
@@ -500,8 +338,6 @@ class IcaoGraphs:
             rel_y = (cur_ylim[1] - ydata) / (cur_ylim[1] - cur_ylim[0])
             self.ax.set_xlim([xdata - new_width * (1 - rel_x), xdata + new_width * rel_x])
             self.ax.set_ylim([ydata - new_height * (1 - rel_y), ydata + new_height * rel_y])
-        elif mode.endswith('_msg_intervals'):
-            pass 
         else:
             # стандартное масштабирование по оси Y
             cur_ylim = self.ax.get_ylim()

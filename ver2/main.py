@@ -42,16 +42,6 @@ if __name__ == '__main__':
         cpr_messages = {}
         icao_dfs = {} 
 
-        # словари для временных меток (для гистограмм)
-        icao_airborne_pos_ts = {}
-        icao_surface_pos_ts = {}
-        icao_ident_timestamps = {}
-        icao_speed_ts = {}
-        icao_status_ts = {}
-        icao_target_state_ts = {}
-        icao_operation_status_ts = {}
-        icao_df11_ts = {} # Добавлено для DF11
-
         current_baro_buffer = {} 
 
         try:
@@ -84,10 +74,6 @@ if __name__ == '__main__':
                     else:
                         icao_times[aa]["last"] = msg.timestamp
                     
-                    # Сбор DF11 
-                    if df == 11:
-                        icao_df11_ts.setdefault(aa, []).append(msg.timestamp)
-
                     try:
                         # попытка извлечения высоты из любого доступного DF
                         alt = decoder.get_altitude_any_df(message_str, df)
@@ -104,22 +90,6 @@ if __name__ == '__main__':
                         if df in [17, 18]:
                             tc = pms.adsb.typecode(message_str)
                             
-                            # сбор данных для гистограмм
-                            if (9 <= tc <= 18) or (20 <= tc <= 22):
-                                icao_airborne_pos_ts.setdefault(aa, []).append(msg.timestamp)
-                            if 5 <= tc <= 8:
-                                icao_surface_pos_ts.setdefault(aa, []).append(msg.timestamp)
-                            if 1 <= tc <= 4:
-                                icao_ident_timestamps.setdefault(aa, []).append(msg.timestamp)
-                            if tc == 19:
-                                icao_speed_ts.setdefault(aa, []).append(msg.timestamp)
-                            if tc == 28:
-                                icao_status_ts.setdefault(aa, []).append(msg.timestamp)
-                            if tc == 29:
-                                icao_target_state_ts.setdefault(aa, []).append(msg.timestamp)
-                            if tc == 31:
-                                icao_operation_status_ts.setdefault(aa, []).append(msg.timestamp)
-
                             # декодирование координат (CPR)
                             if 9 <= tc <= 18:
                                 cpr_messages.setdefault(aa, [None, None])
@@ -252,10 +222,7 @@ if __name__ == '__main__':
 
             # запуск визуализации
             IcaoGraphs(icao_altitude, icao_speed, icao_positions, icao_courses, adsb_icao_list, icao_callsigns, 
-                       icao_selected_altitude, icao_altitude_difference, icao_baro_correction, icao_gnss_altitude,
-                       icao_airborne_pos_ts, icao_surface_pos_ts, icao_ident_timestamps,
-                       icao_speed_ts, icao_status_ts, icao_target_state_ts, icao_operation_status_ts,
-                       icao_df11_ts)
+                       icao_selected_altitude, icao_altitude_difference, icao_baro_correction, icao_gnss_altitude)
 
         except FileNotFoundError:
             print(f"Файл {file_path} не найден")
