@@ -41,6 +41,13 @@ if __name__ == '__main__':
         icao_courses = {}
         cpr_messages = {}
         icao_dfs = {} 
+        
+        # словари для хранения параметров качества сигнала
+        icao_nic = {} 
+        icao_nacp = {}
+        icao_gva = {}
+        icao_sil = {}
+        icao_nacv = {}
 
         current_baro_buffer = {} 
 
@@ -90,6 +97,11 @@ if __name__ == '__main__':
                         if df in [17, 18]:
                             tc = pms.adsb.typecode(message_str)
                             
+                            # сбор данных nic из любого доступного сообщения
+                            nic_val = decoder.get_nic(message_str)
+                            if nic_val is not None:
+                                icao_nic.setdefault(aa, []).append((msg.timestamp, nic_val))
+
                             # декодирование координат (CPR)
                             if 9 <= tc <= 18:
                                 cpr_messages.setdefault(aa, [None, None])
@@ -125,6 +137,11 @@ if __name__ == '__main__':
                                             gnss_alt = last_baro + alt_diff
                                             icao_gnss_altitude.setdefault(aa, []).append((msg.timestamp, gnss_alt))
 
+                                # сбор nacv
+                                nac_v = decoder.get_nac_v(message_str)
+                                if nac_v is not None:
+                                    icao_nacv.setdefault(aa, []).append((msg.timestamp, nac_v))
+
                             # декодирование позывного (ICAO)
                             elif 1 <= tc <= 4:
                                 cs = decoder.get_callsign(message_str)
@@ -144,6 +161,17 @@ if __name__ == '__main__':
                                 baro_corr = decoder.get_baro_correction(message_str)
                                 if baro_corr is not None:
                                     icao_baro_correction.setdefault(aa, []).append((msg.timestamp, baro_corr))
+
+                            # сбор параметров статуса
+                            elif tc == 31:
+                                # сбор nacp gva sil
+                                nac_p, gva, sil = decoder.get_operational_status_params(message_str)
+                                if nac_p is not None:
+                                    icao_nacp.setdefault(aa, []).append((msg.timestamp, nac_p))
+                                if gva is not None:
+                                    icao_gva.setdefault(aa, []).append((msg.timestamp, gva))
+                                if sil is not None:
+                                    icao_sil.setdefault(aa, []).append((msg.timestamp, sil))
                                     
                     except Exception:
                         continue
@@ -222,7 +250,8 @@ if __name__ == '__main__':
 
             # запуск визуализации
             IcaoGraphs(icao_altitude, icao_speed, icao_positions, icao_courses, adsb_icao_list, icao_callsigns, 
-                       icao_selected_altitude, icao_altitude_difference, icao_baro_correction, icao_gnss_altitude)
+                       icao_selected_altitude, icao_altitude_difference, icao_baro_correction, icao_gnss_altitude,
+                       icao_nic, icao_nacp, icao_gva, icao_sil, icao_nacv)
 
         except FileNotFoundError:
             print(f"Файл {file_path} не найден")

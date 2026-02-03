@@ -130,7 +130,7 @@ def get_altitude_difference(msg_str):
         df = pms.df(msg_str)
         if df not in [17, 18]: return None
         # проверяем, что это сообщение о скорости (тип 19)
-        tc = pms.typecode(msg_str)
+        tc = pms.adsb.typecode(msg_str)
         if tc != 19:
             return None
         
@@ -178,6 +178,82 @@ def get_callsign(msg_str):
             if not callsign: return None
             # очищаем позывной от лишних символов
             return ''.join(c for c in callsign if c.isalnum())
+        return None
+    except:
+        return None
+
+# функция получения nic по type code и биту nic-b
+def get_nic(msg_str):
+    try:
+        df = pms.df(msg_str)
+        if df not in [17, 18]: return None
+        tc = pms.adsb.typecode(msg_str)
+        
+        # для сообщений координат в воздухе
+        if 9 <= tc <= 18:
+            # бит nic-b это 40-й бит сообщения
+            nic_b = int(msg_str[9], 16) & 1
+            
+            if tc == 9: return 11
+            if tc == 10: return 10
+            if tc == 11: return 9 if nic_b else 8
+            if tc == 12: return 7
+            if tc == 13: return 6
+            if tc == 14: return 5
+            if tc == 15: return 4
+            if tc == 16: return 3 if nic_b else 2
+            if tc == 17: return 1
+            if tc == 18: return 0
+            
+        # для сообщений на земле
+        if 5 <= tc <= 8:
+            mapping = {5: 11, 6: 10, 7: 9, 8: 8}
+            return mapping.get(tc)
+
+        return None
+    except:
+        return None
+
+# получение параметров nacp gva sil из 65 регистра
+def get_operational_status_params(msg_str):
+    try:
+        df = pms.df(msg_str)
+        if df not in [17, 18]: return None
+        tc = pms.adsb.typecode(msg_str)
+        
+        # сообщение operational status
+        if tc == 31:
+            msg_int = int(msg_str, 16)
+            me_field = (msg_int >> 24) & 0xFFFFFFFFFFFFFF 
+            
+            # извлекаем биты 
+            nac_p = (me_field >> 8) & 0xF 
+            gva = (me_field >> 6) & 0x3
+            sil = (me_field >> 4) & 0x3
+            
+            return nac_p, gva, sil
+            
+        return None, None, None
+    except:
+        return None, None, None
+
+# получение nacv из 19 регистра
+def get_nac_v(msg_str):
+    try:
+        df = pms.df(msg_str)
+        if df not in [17, 18]: return None
+        tc = pms.adsb.typecode(msg_str)
+        
+        # сообщение о скорости в воздухе
+        if tc == 19:
+            msg_int = int(msg_str, 16)
+            me_field = (msg_int >> 24) & 0xFFFFFFFFFFFFFF
+            
+            # nacv занимает биты 11-13 поля me
+            nac_v = (me_field >> 43) & 0x7 
+            
+            return nac_v
+            
         return None
     except:
         return None
