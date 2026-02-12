@@ -257,6 +257,22 @@ def get_nac_v(msg_str):
         return None
     except:
         return None
+    
+def get_nic_baro(msg_str):
+
+    try:
+        df = pms.df(msg_str)
+        if df not in [17, 18]: return None
+        
+        tc = pms.adsb.typecode(msg_str)
+        # NIC Baro передается только в Operational Status (TC 31)
+        if tc == 31:
+            # Используем встроенную функцию библиотеки pyModeS
+            return pms.adsb.nic_baro(msg_str)
+            
+        return None
+    except:
+        return None
 
 # вспомогательная функция для генерации метки формата сообщения
 def get_format_label(msg_str, df):

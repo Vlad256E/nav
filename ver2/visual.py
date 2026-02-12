@@ -272,8 +272,7 @@ class IcaoGraphs:
             if sil_data:
                 times = [timestamp_to_utc(t) for t, v in sorted(sil_data)]
                 values = [v for t, v in sorted(sil_data)]
-                values_scaled = [v * 3 for v in values]
-                self.ax.step(times, values_scaled, where='post', color='darkorange', linestyle='--', label='SIL (x3) - Рег65')
+                self.ax.step(times, values, where='post', color='darkorange', linestyle='--', label='SIL (x3) - Рег65')
             
             self.ax.set_yticks(range(0, 13))
             self.ax.grid(True, axis='y')

@@ -48,6 +48,7 @@ if __name__ == '__main__':
         icao_gva = {}
         icao_sil = {}
         icao_nacv = {}
+        icao_nic_baro = {}
 
         current_baro_buffer = {} 
 
@@ -172,6 +173,9 @@ if __name__ == '__main__':
                                     icao_gva.setdefault(aa, []).append((msg.timestamp, gva))
                                 if sil is not None:
                                     icao_sil.setdefault(aa, []).append((msg.timestamp, sil))
+                                    nb = decoder.get_nic_baro(message_str)
+                                if nb is not None:
+                                    icao_nic_baro[aa] = nb
                                     
                     except Exception:
                         continue
@@ -201,7 +205,7 @@ if __name__ == '__main__':
             print("=" * 155)
             print(" "*65 + "СВОДНАЯ ТАБЛИЦА")
             print("=" * 155)
-            print(f"{'ICAO':<8} {'Рейс':<12} {'Формат':<24} {'Первое (UTC)':<35} {'Последнее (UTC)':<30} {'POS':<5} {'HDG':<5} {'SEL':<5} {'DIF':<5} {'BAR':<5} {'GNS':<5}")
+            print(f"{'ICAO':<8} {'Рейс':<12} {'Формат':<24} {'Первое (UTC)':<35} {'Последнее (UTC)':<30} {'POS':<5} {'HDG':<5} {'SEL':<5} {'DIF':<5} {'BAR':<5} {'GNS':<5} {'NB':<3}")
             print("-" * 155)
 
             for icao in sorted(list(adsb_icao_list)):
@@ -241,8 +245,9 @@ if __name__ == '__main__':
                 dif_flag = "+" if icao in icao_altitude_difference and icao_altitude_difference[icao] else "-"
                 bar_flag = "+" if icao in icao_baro_correction and icao_baro_correction[icao] else "-"
                 gnss_flag = "+" if icao in icao_gnss_altitude and icao_gnss_altitude[icao] else "-"
+                nb_val = icao_nic_baro.get(icao, "-")
 
-                print(f"{icao:<8} {callsign:<12} {dfs_str:<24} {first_utc_str:<35} {last_utc_str:<30} {pos_flag:<5} {hdg_flag:<5} {sel_flag:<5} {dif_flag:<5} {bar_flag:<5} {gnss_flag:<5}")
+                print(f"{icao:<8} {callsign:<12} {dfs_str:<24} {first_utc_str:<35} {last_utc_str:<30} {pos_flag:<5} {hdg_flag:<5} {sel_flag:<5} {dif_flag:<5} {bar_flag:<5} {gnss_flag:<5} {nb_val:<3}")
                 
             print(f"\nВсего бортов обнаружено: {total_icao_count}")
             print(f"Отфильтровано (без ADS-B): {filtered_count}")
