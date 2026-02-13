@@ -480,15 +480,15 @@ class IcaoGraphs:
                 values = [GVA_TO_PERCENT.get(v, 0) for t, v in sorted(gva_data)]
                 self.ax.step(times, values, where='post', color='purple', linestyle='--', linewidth=2.5, label='VFOM (%)')
 
-            self.ax.set_yticks(range(0, 101, 10))
+            # self.ax.set_yticks(range(0, 101, 10))
             self.ax.grid(True, axis='y')
 
             # Добавляем плашку с уточнением соотношения значений внутри графика
             info_text = (
                 "Значения в метрах (от 100% к 0%):\n"
-                "HIL:  < 7.5м  > 37км\n"
-                "HFOM:  < 3м  →  > 18.5км\n"
-                "VFOM:   <= 45м  →  >= 150м"
+                "HIL: < 7.5м → 37км\n"
+                "HFOM: < 3м → > 18.5км\n"
+                "VFOM: <= 45м → >= 150м"
             )
             self.ax.text(0.02, 0.05, info_text, transform=self.ax.transAxes, 
                          fontsize=10, verticalalignment='bottom', horizontalalignment='left',
@@ -552,7 +552,33 @@ class IcaoGraphs:
             if ylim and ylim != 'auto':
                 self.ax.set_ylim(ylim)
 
+        self.update_quality_yticks()
         self.fig.canvas.draw_idle()
+
+    def update_quality_yticks(self):
+        # Применяем только для нужного графика
+        if not self.icao_list or self.plot_modes[self.plot_mode_idx] != 'quality_percentages': 
+            return
+            
+        y_min, y_max = self.ax.get_ylim()
+        span = y_max - y_min
+        
+        if span > 40:
+            # Если график отдален (видно более 40%), используем автоматические круглые шаги (10, 20...)
+            self.ax.yaxis.set_major_locator(AutoLocator())
+        else:
+            # При сильном приближении вычисляем все точные значения из ваших словарей
+            exact_vals = sorted(set(NIC_TO_PERCENT.values()) | 
+                                set(NACP_TO_PERCENT.values()) | 
+                                set(GVA_TO_PERCENT.values()))
+            
+            # Оставляем только те точные значения, которые попадают в видимую область экрана
+            ticks = [v for v in exact_vals if y_min <= v <= y_max]
+            
+            if ticks:
+                self.ax.set_yticks(ticks)
+            else:
+                self.ax.yaxis.set_major_locator(AutoLocator())
 
     # функция-обработчик для масштабирования колесом мыши
     def on_scroll(self, event):
@@ -584,6 +610,7 @@ class IcaoGraphs:
             new_height = (cur_ylim[1] - cur_ylim[0]) * scale_factor
             rel_y = (cur_ylim[1] - ydata) / (cur_ylim[1] - cur_ylim[0])
             self.ax.set_ylim([ydata - new_height * (1-rel_y), ydata + new_height * rel_y])
+        self.update_quality_yticks()
         self.fig.canvas.draw_idle()
 
     # функции навигации по интерфейсу
