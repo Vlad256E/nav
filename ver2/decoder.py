@@ -259,7 +259,6 @@ def get_nac_v(msg_str):
         return None
     
 def get_nic_baro(msg_str):
-
     try:
         df = pms.df(msg_str)
         if df not in [17, 18]: return None
@@ -276,7 +275,6 @@ def get_nic_baro(msg_str):
 
 # вспомогательная функция для генерации метки формата сообщения
 def get_format_label(msg_str, df):
-    
     if df in [0, 4, 5, 11]:
         length_type = "S"
     elif df in [16, 17, 18, 19, 20, 21, 24]:

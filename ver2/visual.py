@@ -1,8 +1,46 @@
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.widgets import Button
+from matplotlib.ticker import ScalarFormatter
 import numpy as np
 from utils import timestamp_to_utc
+
+NIC_TO_HIL = {
+    11: 7.5,
+    10: 25.0,
+    9: 75.0,
+    8: 185.2,   # 0.1 NM
+    7: 370.4,   # 0.2 NM
+    6: 1111.2,  # 0.6 NM
+    5: 1852.0,  # 1.0 NM
+    4: 3704.0,  # 2.0 NM
+    3: 7408.0,  # 4.0 NM
+    2: 14816.0, # 8.0 NM
+    1: 37040.0, # 20.0 NM
+    0: 40000.0  # > 20 NM или Неизвестно
+}
+
+NACP_TO_HFOM = {
+    11: 3.0,
+    10: 10.0,
+    9: 30.0,
+    8: 92.6,    # 0.05 NM
+    7: 185.2,   # 0.1 NM
+    6: 555.6,   # 0.3 NM
+    5: 926.0,   # 0.5 NM
+    4: 1852.0,  # 1.0 NM
+    3: 3704.0,  # 2.0 NM
+    2: 7408.0,  # 4.0 NM
+    1: 18520.0, # 10.0 NM
+    0: 20000.0  # >= 10 NM или Неизвестно
+}
+
+GVA_TO_VFOM = {
+    2: 45.0,
+    1: 150.0,
+    0: 500.0,   # > 150 м или Неизвестно
+    3: 0.0      # Резерв
+}
 
 # класс для создания и управления окном с графиками
 class IcaoGraphs:
@@ -41,7 +79,8 @@ class IcaoGraphs:
         self.nacv_dict = icao_nacv if icao_nacv else {}
         
         self.icao_index = 0
-        
+    
+
         # список доступных режимов (типов графиков)
         self.plot_modes = [
             'all_tracks', 
@@ -53,7 +92,10 @@ class IcaoGraphs:
             'course', 
             'track', 
             'integrity', 
+            'hil',
             'accuracy_pos', 
+            'hfom',
+            'vfom',
             'accuracy_vel', 
             'altitude_diff', 
             'baro_correction'
@@ -74,7 +116,10 @@ class IcaoGraphs:
             'baro_correction': (950, 1050),
             'integrity': (-0.5, 12.5),
             'accuracy_pos': (-0.5, 16.5),
-            'accuracy_vel': (-0.5, 8.5)
+            'accuracy_vel': (-0.5, 8.5),
+            'hil': (-100, 45000 ),
+            'hfom': (-100, 21000),
+            'vfom': (-10, 600)
         }
 
         # создание окна и основной области для рисования
@@ -272,17 +317,52 @@ class IcaoGraphs:
             if sil_data:
                 times = [timestamp_to_utc(t) for t, v in sorted(sil_data)]
                 values = [v for t, v in sorted(sil_data)]
-                self.ax.step(times, values, where='post', color='darkorange', linestyle='--', label='SIL (x3) - Рег65')
+                self.ax.step(times, values, where='post', color='darkorange', linestyle='--', label='SIL - Рег65')
             
             self.ax.set_yticks(range(0, 13))
             self.ax.grid(True, axis='y')
+
+        # блок отрисовки графика hil
+        elif mode == 'hil':
+            nic_data = self.nic_dict.get(icao, [])
+            title, label = f"Предел Целостности (HIL): {display_id}", "HIL (метры)"
+            
+            # список значений из справочника
+            hil_levels = sorted(list(set(NIC_TO_HIL.values())))
+
+            if not nic_data:
+                self.ax.text(0.5, 0.5, "Нет данных NIC для расчета HIL", ha='center', transform=self.ax.transAxes)
+            else:
+                times = []
+                values = []
+                for t, nic in sorted(nic_data):
+                    hil_val = NIC_TO_HIL.get(nic, 40000.0) 
+                    times.append(timestamp_to_utc(t))
+                    values.append(hil_val)
+                
+                self.ax.step(times, values, where='post', color='red', linewidth=2, label='HIL')
+                
+                # Логарифмическая шкала, чтобы видеть и 7м и 40км
+                self.ax.set_yscale('log')
+                # Чуть расширяем границы, чтобы крайние точки не прилипали
+                self.ax.set_ylim(min(hil_levels)*0.9, max(hil_levels)*1.1)
+                
+                self.ax.set_yticks(hil_levels)
+                
+                # Форматируем как обычные числа
+                formatter = ScalarFormatter()
+                formatter.set_scientific(False)
+                self.ax.get_yaxis().set_major_formatter(formatter)
+                
+                # Сетка будет только на этих уровнях
+                self.ax.grid(True, axis='y', linestyle='--', alpha=0.5)
 
         # блок отрисовки графика точности позиции
         elif mode == 'accuracy_pos':
             nacp_data = self.nacp_dict.get(icao, [])
             gva_data = self.gva_dict.get(icao, [])
             title = f"Точность Позиции: {display_id}"
-            self.ax.set_ylabel("Категория (Чем выше, тем точнее)")
+            self.ax.set_ylabel("Категория")
             
             if not nacp_data and not gva_data:
                  self.ax.text(0.5, 0.5, "Нет данных точности (Reg 65 TC 31)", ha='center', transform=self.ax.transAxes)
@@ -295,11 +375,65 @@ class IcaoGraphs:
             if gva_data:
                 times = [timestamp_to_utc(t) for t, v in sorted(gva_data)]
                 values = [v for t, v in sorted(gva_data)]
-                values_scaled = [v * 4 for v in values]
-                self.ax.step(times, values_scaled, where='post', color='purple', linestyle='--', label='GVA (VFOM) масштабир. [0-3]')
+                self.ax.step(times, values, where='post', color='purple', linestyle='--', label='GVA (VFOM) масштабир. [0-3]')
 
             self.ax.set_yticks(range(0, 17))
             self.ax.grid(True, axis='y')
+
+        # блок отрисовки графика hfom
+        elif mode == 'hfom':
+            nacp_data = self.nacp_dict.get(icao, [])
+            title, label = f"Точность (HFOM): {display_id}", "HFOM (метры, 95%)"
+            
+            # список уникальных значений из справочника
+            hfom_levels = sorted(list(set(NACP_TO_HFOM.values())))
+
+            if not nacp_data:
+                self.ax.text(0.5, 0.5, "Нет данных NACp", ha='center', transform=self.ax.transAxes)
+            else:
+                times = []
+                values = []
+                for t, nacp in sorted(nacp_data):
+                    hfom_val = NACP_TO_HFOM.get(nacp, 20000.0)
+                    times.append(timestamp_to_utc(t))
+                    values.append(hfom_val)
+                
+                self.ax.step(times, values, where='post', color='blue', linewidth=2, label='HFOM (гориз. точность)')
+                
+                # Логарифмическая шкала
+                self.ax.set_yscale('log')
+                self.ax.set_ylim(min(hfom_levels)*0.9, max(hfom_levels)*1.1)
+                
+                self.ax.set_yticks(hfom_levels)
+                
+                # Форматируем как обычные числа
+                formatter = ScalarFormatter()
+                formatter.set_scientific(False)
+                self.ax.get_yaxis().set_major_formatter(formatter)
+                
+                self.ax.grid(True, axis='y', linestyle='--', alpha=0.5)
+        
+        # блок отрисовки графика vfom
+        elif mode == 'vfom':
+            gva_data = self.gva_dict.get(icao, [])
+            title, label = f"Точность (VFOM): {display_id}", "VFOM (метры, 95%)"
+            
+            vfom_levels = sorted(list(set(GVA_TO_VFOM.values())))
+
+            if not gva_data:
+                self.ax.text(0.5, 0.5, "Нет данных GVA", ha='center', transform=self.ax.transAxes)
+            else:
+                times = []
+                values = []
+                for t, gva in sorted(gva_data):
+                    vfom_val = GVA_TO_VFOM.get(gva, 500.0) 
+                    times.append(timestamp_to_utc(t))
+                    values.append(vfom_val)
+                
+                self.ax.step(times, values, where='post', color='purple', linewidth=2, label='VFOM (верт. точность)')
+                
+                self.ax.set_yticks(vfom_levels)
+                self.ax.grid(True, axis='y', linestyle='-', alpha=0.5)
 
         # блок отрисовки графика точности скорости
         elif mode == 'accuracy_vel':
