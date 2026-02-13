@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.widgets import Button
-from matplotlib.ticker import ScalarFormatter
+from matplotlib.ticker import ScalarFormatter, AutoLocator
 import numpy as np
 from utils import timestamp_to_utc
 
@@ -40,6 +40,21 @@ GVA_TO_VFOM = {
     1: 150.0,
     0: 500.0,   # > 150 м или Неизвестно
     3: 0.0      # Резерв
+}
+
+# словари для соотношения значений и процентов
+NIC_TO_PERCENT = {
+    11: 100, 10: 86, 9: 73, 8: 62, 7: 54, 6: 41, 
+    5: 35, 4: 27, 3: 19, 2: 11, 1: 0, 0: 0
+}
+
+NACP_TO_PERCENT = {
+    11: 100, 10: 86, 9: 74, 8: 61, 7: 53, 6: 40, 
+    5: 34, 4: 26, 3: 18, 2: 10, 1: 0, 0: 0
+}
+
+GVA_TO_PERCENT = {
+    2: 100, 1: 0, 0: 0, 3: 0
 }
 
 # класс для создания и управления окном с графиками
@@ -96,6 +111,7 @@ class IcaoGraphs:
             'accuracy_pos', 
             'hfom',
             'vfom',
+            'quality_percentages',
             'accuracy_vel', 
             'altitude_diff', 
             'baro_correction'
@@ -119,7 +135,8 @@ class IcaoGraphs:
             'accuracy_vel': (-0.5, 8.5),
             'hil': (-100, 45000 ),
             'hfom': (-100, 21000),
-            'vfom': (-10, 600)
+            'vfom': (-10, 600),
+            'quality_percentages': (-5, 110)
         }
 
         # создание окна и основной области для рисования
@@ -434,6 +451,48 @@ class IcaoGraphs:
                 
                 self.ax.set_yticks(vfom_levels)
                 self.ax.grid(True, axis='y', linestyle='-', alpha=0.5)
+
+        # блок отрисовки графиков качества в процентах
+        elif mode == 'quality_percentages':
+            nic_data = self.nic_dict.get(icao, [])
+            nacp_data = self.nacp_dict.get(icao, [])
+            gva_data = self.gva_dict.get(icao, [])
+            
+            title = f"Качество данных в % (Сводный график): {display_id}"
+            self.ax.set_ylabel("Качество (%, логарифмическая шкала)")
+            
+            if not nic_data and not nacp_data and not gva_data:
+                 self.ax.text(0.5, 0.5, "Нет данных качества (Reg 05/65)", ha='center', transform=self.ax.transAxes)
+
+            # Рисуем графики процентов
+            if nic_data:
+                times = [timestamp_to_utc(t) for t, v in sorted(nic_data)]
+                values = [NIC_TO_PERCENT.get(v, 0) for t, v in sorted(nic_data)]
+                self.ax.step(times, values, where='post', color='red', linewidth=2.5, label='HIL (%)')
+            
+            if nacp_data:
+                times = [timestamp_to_utc(t) for t, v in sorted(nacp_data)]
+                values = [NACP_TO_PERCENT.get(v, 0) for t, v in sorted(nacp_data)]
+                self.ax.step(times, values, where='post', color='blue', linewidth=2.5, label='HFOM (%)')
+
+            if gva_data:
+                times = [timestamp_to_utc(t) for t, v in sorted(gva_data)]
+                values = [GVA_TO_PERCENT.get(v, 0) for t, v in sorted(gva_data)]
+                self.ax.step(times, values, where='post', color='purple', linestyle='--', linewidth=2.5, label='VFOM (%)')
+
+            self.ax.set_yticks(range(0, 101, 10))
+            self.ax.grid(True, axis='y')
+
+            # Добавляем плашку с уточнением соотношения значений внутри графика
+            info_text = (
+                "Значения в метрах (от 100% к 0%):\n"
+                "HIL:  < 7.5м  > 37км\n"
+                "HFOM:  < 3м  →  > 18.5км\n"
+                "VFOM:   <= 45м  →  >= 150м"
+            )
+            self.ax.text(0.02, 0.05, info_text, transform=self.ax.transAxes, 
+                         fontsize=10, verticalalignment='bottom', horizontalalignment='left',
+                         bbox=dict(boxstyle='round,pad=0.5', facecolor='white', edgecolor='gray', alpha=0.9), zorder=10)
 
         # блок отрисовки графика точности скорости
         elif mode == 'accuracy_vel':
