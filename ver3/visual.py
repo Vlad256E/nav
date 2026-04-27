@@ -134,174 +134,129 @@ class IcaoGraphs:
             [Input('icao-dropdown', 'value'),
              Input('mode-dropdown', 'value')]
         )
+        @self.app.callback(
+            Output('main-graph', 'figure'),
+            [Input('icao-dropdown', 'value'),
+             Input('mode-dropdown', 'value')]
+        )
         def update_graph(icao, mode):
             if not icao:
-                return go.Figure().add_annotation(text="Нет данных", showarrow=False, font=dict(size=20))
-            
+                return go.Figure()
+
             display_id = self.get_display_id(icao)
 
             # ---------------------------------------------------------
-            # РЕЖИМ 1: ТРЕК И ОБЩАЯ КАРТА (2D)
+            # РЕЖИМ 1: ОБЫЧНАЯ СХЕМА ТРЕКА (БЕЗ КАРТЫ)
             # ---------------------------------------------------------
             if mode == 'track':
-                fig = go.Figure()
-                
-                # Фоновые треки (серые)
-                for track_icao, track_data in self.pos_dict.items():
-                    if track_icao not in self.icao_list or track_icao == icao: continue
-                    lons = [lon for t, lat, lon in track_data]
-                    lats = [lat for t, lat, lon in track_data]
-                    fig.add_trace(go.Scatter(
-                        x=lons, y=lats, mode='lines', 
-                        line=dict(color='grey', width=1), opacity=0.4, 
-                        hoverinfo='skip', showlegend=False
-                    ))
-
-                # Активный трек с раскраской
                 data = self.pos_dict.get(icao)
-                if data:
-                    lons = [lon for t, lat, lon in data]
-                    lats = [lat for t, lat, lon in data]
-                    nic_data = self.nic_dict.get(icao, [])
-                    nic_lookup = {t: v for t, v in nic_data}
-                    colors = [nic_lookup.get(t, 0) for t, lat, lon in data]
-                    
-                    fig.add_trace(go.Scatter(
-                        x=lons, y=lats, mode='lines+markers',
-                        marker=dict(
-                            color=colors, colorscale='RdYlGn', cmin=0, cmax=11,
-                            size=6, showscale=True, 
-                            colorbar=dict(title="NIC", thickness=15)
-                        ),
-                        line=dict(color='black', width=1),
-                        name=display_id
-                    ))
-                
+                if not data:
+                    return go.Figure().add_annotation(text="Нет данных координат", showarrow=False)
+
+                lats = [lat for t, lat, lon in data]
+                lons = [lon for t, lat, lon in data]
+
+                fig = go.Figure(go.Scatter(
+                    x=lons, y=lats, mode='lines+markers',
+                    marker=dict(size=4, color='blue'),
+                    line=dict(width=1, color='blue'),
+                    text=[timestamp_to_utc(t).strftime('%H:%M:%S') for t, lat, lon in data],
+                    name=display_id
+                ))
                 fig.update_layout(
-                    title=f"Схема трека: {display_id}",
-                    xaxis_title="Долгота (°)",
-                    yaxis_title="Широта (°)",
-                    yaxis=dict(scaleanchor="x", scaleratio=1), # Сохранение пропорций карты
+                    title=f"Схема трека (Сетка): {display_id}",
+                    xaxis_title="Долгота", yaxis_title="Широта",
+                    yaxis=dict(scaleanchor="x", scaleratio=1),
                     template="plotly_white"
                 )
                 return fig
 
             # ---------------------------------------------------------
-            # РЕЖИМ 1.5: АНИМАЦИЯ ПОЛЕТА (ПЛЕЕР)
+            # РЕЖИМ 1.5: АНИМАЦИЯ ПОЛЕТА (С РЕАЛЬНОЙ КАРТОЙ)
             # ---------------------------------------------------------
             elif mode == 'animation':
-                fig = go.Figure()
                 data = self.pos_dict.get(icao)
-                
                 if not data or len(data) < 2:
-                    return go.Figure().add_annotation(text="Недостаточно данных координат для анимации", showarrow=False, font=dict(size=20))
+                    return go.Figure().add_annotation(text="Недостаточно данных", showarrow=False)
 
-                # Сортируем данные по времени
+                # Сортировка и оптимизация количества точек
                 data = sorted(data, key=lambda x: x[0])
-                
-                # Оптимизация: если точек слишком много (браузер начнет тормозить от тысяч кадров),
-                # прореживаем их, чтобы максимум было около ~800 кадров
-                step = max(1, len(data) // 800)
+                step = max(1, len(data) // 600)
                 data = data[::step]
 
-                times = [timestamp_to_utc(t).strftime('%H:%M:%S') for t, lat, lon in data]
                 lats = [lat for t, lat, lon in data]
                 lons = [lon for t, lat, lon in data]
+                times = [timestamp_to_utc(t).strftime('%H:%M:%S') for t, lat, lon in data]
 
-                # Trace 0: Полный серый маршрут (фон)
-                fig.add_trace(go.Scatter(
-                    x=lons, y=lats, mode='lines', 
-                    line=dict(color='lightgrey', width=2), 
-                    name='Весь маршрут', hoverinfo='skip'
+                fig = go.Figure()
+
+                # 1. Фоновый маршрут (серый)
+                fig.add_trace(go.Scattermapbox(
+                    lat=lats, lon=lons, 
+                    mode='lines', 
+                    line=dict(width=2, color='gray'), 
+                    opacity=0.3, 
+                    name='Весь путь'
                 ))
-
-                # Trace 1: Маркер текущей позиции самолета
-                fig.add_trace(go.Scatter(
-                    x=[lons[0]], y=[lats[0]], mode='markers',
-                    marker=dict(color='red', size=12, symbol='circle', line=dict(color='darkred', width=2)),
-                    name='Текущая позиция'
-                ))
-
-                # Trace 2: Пройденный путь (будет расти)
-                fig.add_trace(go.Scatter(
-                    x=[lons[0]], y=[lats[0]], mode='lines',
-                    line=dict(color='blue', width=3),
-                    name='Пройденный путь'
-                ))
-
-                # Генерируем кадры анимации и шаги для ползунка перемотки
-                frames = []
-                slider_steps = []
                 
+                # 2. Пройденный путь (синий)
+                fig.add_trace(go.Scattermapbox(
+                    lat=[lats[0]], lon=[lons[0]], 
+                    mode='lines', 
+                    line=dict(width=4, color='blue'), 
+                    name='Пройдено'
+                ))
+
+                # 3. Текущая позиция (красный кружок)
+                # ВАЖНО: Убрал 'symbol', чтобы карта не требовала токен
+                fig.add_trace(go.Scattermapbox(
+                    lat=[lats[0]], lon=[lons[0]], 
+                    mode='markers', 
+                    marker=dict(size=14, color='red'), 
+                    name='Самолет'
+                ))
+
+                # Создание кадров
+                frames = []
                 for i in range(len(data)):
-                    # Кадр содержит обновленные данные для маркера и пройденного пути
                     frames.append(go.Frame(
                         data=[
-                            go.Scatter(x=[lons[i]], y=[lats[i]]),     # Обновляем Trace 1 (самолет)
-                            go.Scatter(x=lons[:i+1], y=lats[:i+1])    # Обновляем Trace 2 (хвост)
+                            go.Scattermapbox(lat=lats, lon=lons), 
+                            go.Scattermapbox(lat=lats[:i+1], lon=lons[:i+1]), 
+                            go.Scattermapbox(lat=[lats[i]], lon=[lons[i]])
                         ],
-                        traces=[1, 2], # Указываем, какие слои обновлять
                         name=str(i)
                     ))
-                    
+                fig.frames = frames
+
+                # Настройка слайдера
+                slider_steps = []
+                for i in range(len(data)):
                     slider_steps.append(dict(
-                        args=[
-                            [str(i)], 
-                            dict(mode="immediate", frame=dict(duration=0, redraw=False), transition=dict(duration=0))
-                        ],
-                        label=times[i],
+                        args=[[str(i)], dict(mode="immediate", frame=dict(duration=0, redraw=False), transition=dict(duration=0))],
+                        label=times[i], 
                         method="animate"
                     ))
 
-                fig.frames = frames
-
-                # Кнопки управления (Play, Fast, Pause)
-                updatemenus = [dict(
-                    type="buttons",
-                    direction="left",
-                    buttons=[
-                        dict(
-                            label="▶ Норм",
-                            method="animate",
-                            args=[None, dict(frame=dict(duration=200, redraw=False), transition=dict(duration=0), fromcurrent=True, mode="immediate")]
-                        ),
-                        dict(
-                            label="▶▶ Быстро",
-                            method="animate",
-                            args=[None, dict(frame=dict(duration=40, redraw=False), transition=dict(duration=0), fromcurrent=True, mode="immediate")]
-                        ),
-                        dict(
-                            label="⏸ Пауза",
-                            method="animate",
-                            args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate", transition=dict(duration=0))]
-                        )
-                    ],
-                    showactive=False,
-                    x=0.05, y=1.1, xanchor="left", yanchor="top",
-                    pad={"r": 10, "t": 10}
-                )]
-
-                # Ползунок (Таймлайн)
-                sliders = [dict(
-                    active=0,
-                    yanchor="top",
-                    xanchor="left",
-                    currentvalue=dict(font=dict(size=14), prefix="UTC: ", visible=True, xanchor="right"),
-                    transition=dict(duration=0, easing="linear"),
-                    pad=dict(b=10, t=50),
-                    len=0.9,
-                    x=0.1, y=0,
-                    steps=slider_steps
-                )]
-
+                # Итоговый Layout с Mapbox
                 fig.update_layout(
-                    title=f"Анимация полета: {display_id}",
-                    xaxis_title="Долгота (°)",
-                    yaxis_title="Широта (°)",
-                    yaxis=dict(scaleanchor="x", scaleratio=1), # Сохранение пропорций географической карты
-                    template="plotly_white",
-                    updatemenus=updatemenus,
-                    sliders=sliders
+                    title=f"Интерактивная карта: {display_id}",
+                    autosize=True,
+                    hovermode='closest',
+                    mapbox=dict(
+                        style="open-street-map", # Бесплатный стиль
+                        center=dict(lat=np.mean(lats), lon=np.mean(lons)),
+                        zoom=8
+                    ),
+                    updatemenus=[dict(
+                        type="buttons", direction="left", x=0, y=1.05,
+                        buttons=[
+                            dict(label="Play", method="animate", args=[None, dict(frame=dict(duration=50, redraw=True), fromcurrent=True)]),
+                            dict(label="Pause", method="animate", args=[[None], dict(frame=dict(duration=0, redraw=True), mode="immediate")])
+                        ]
+                    )],
+                    sliders=[dict(active=0, steps=slider_steps, x=0.1, len=0.9, pad=dict(t=50))],
+                    margin={"r":0,"t":50,"l":0,"b":0}
                 )
                 return fig
 
