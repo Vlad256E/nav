@@ -232,6 +232,16 @@ if __name__ == '__main__':
             print(f"Отфильтровано (без ADS-B): {filtered_count}")
             print(f"Осталось бортов (ADS-B): {len(adsb_icao_list)}\n")
 
+            # сортировка данных по времени 
+            for icao in adsb_icao_list:
+                if icao in icao_altitude: icao_altitude[icao].sort(key=lambda x: x[0])
+                if icao in icao_speed: icao_speed[icao].sort(key=lambda x: x[0])
+                if icao in icao_positions: icao_positions[icao].sort(key=lambda x: x[0])
+                if icao in icao_courses: icao_courses[icao].sort(key=lambda x: x[0])
+                if icao in icao_gnss_altitude: icao_gnss_altitude[icao].sort(key=lambda x: x[0])
+                if icao in icao_selected_altitude: icao_selected_altitude[icao].sort(key=lambda x: x[0])
+                if icao in icao_nic: icao_nic[icao].sort(key=lambda x: x[0])
+
             # запуск визуализации
             IcaoGraphs(icao_altitude, icao_speed, icao_positions, icao_courses, adsb_icao_list, icao_callsigns, 
                        icao_selected_altitude, icao_altitude_difference, icao_baro_correction, icao_gnss_altitude,

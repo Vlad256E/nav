@@ -146,29 +146,66 @@ class IcaoGraphs:
             display_id = self.get_display_id(icao)
 
             # ---------------------------------------------------------
-            # РЕЖИМ 1: ОБЫЧНАЯ СХЕМА ТРЕКА (БЕЗ КАРТЫ)
+            # РЕЖИМ 1: ОБЩАЯ КАРТА (ВСЕ ТРЕКИ) с выделением текущего
             # ---------------------------------------------------------
             if mode == 'track':
-                data = self.pos_dict.get(icao)
-                if not data:
+                if not self.pos_dict:
                     return go.Figure().add_annotation(text="Нет данных координат", showarrow=False)
 
-                lats = [lat for t, lat, lon in data]
-                lons = [lon for t, lat, lon in data]
+                fig = go.Figure()
 
-                fig = go.Figure(go.Scatter(
-                    x=lons, y=lats, mode='lines+markers',
-                    marker=dict(size=4, color='blue'),
-                    line=dict(width=1, color='blue'),
-                    text=[timestamp_to_utc(t).strftime('%H:%M:%S') for t, lat, lon in data],
-                    name=display_id
-                ))
+                # 1. Сначала рисуем фоновые треки (все остальные борты) серым цветом
+                for track_icao, track_data in self.pos_dict.items():
+                    # Пропускаем, если борта нет в рабочем списке или это текущий выбранный борт
+                    if track_icao not in self.icao_list or track_icao == icao: 
+                        continue
+                        
+                    lats = [lat for t, lat, lon in track_data]
+                    lons = [lon for t, lat, lon in track_data]
+                    
+                    fig.add_trace(go.Scatter(
+                        x=lons, y=lats, mode='lines',
+                        line=dict(width=1, color='grey'),
+                        opacity=0.6, # Полупрозрачность для фона, как в visual2.py
+                        hoverinfo='text',
+                        text=[f"Борт: {track_icao}"] * len(lons), # Подсказка при наведении
+                        showlegend=False
+                    ))
+
+                # 2. Затем рисуем трек выбранного борта (красным цветом и толще поверх остальных)
+                current_data = self.pos_dict.get(icao)
+                if current_data:
+                    lats = [lat for t, lat, lon in current_data]
+                    lons = [lon for t, lat, lon in current_data]
+                    times = [timestamp_to_utc(t).strftime('%H:%M:%S') for t, lat, lon in current_data]
+                    
+                    fig.add_trace(go.Scatter(
+                        x=lons, y=lats, mode='lines+markers',
+                        marker=dict(size=4, color='red'),
+                        line=dict(width=2, color='red'),
+                        text=times,
+                        name=display_id,
+                        showlegend=True
+                    ))
+
+                # 3. Настройка внешнего вида графика (пропорции, легенда, заголовок)
                 fig.update_layout(
-                    title=f"Схема трека (Сетка): {display_id}",
-                    xaxis_title="Долгота", yaxis_title="Широта",
-                    yaxis=dict(scaleanchor="x", scaleratio=1),
-                    template="plotly_white"
+                    title="ОБЩАЯ КАРТА (Все обнаруженные треки)",
+                    xaxis_title="Долгота", 
+                    yaxis_title="Широта",
+                    yaxis=dict(scaleanchor="x", scaleratio=1), # Сохранение пропорций как на реальной карте
+                    template="plotly_white",
+                    hovermode='closest',
+                    # Переносим легенду внутрь графика в правый верхний угол (как на скриншоте)
+                    legend=dict(
+                        yanchor="top", y=0.99, 
+                        xanchor="right", x=0.99,
+                        bgcolor="rgba(255, 255, 255, 0.8)", # Белый полупрозрачный фон легенды
+                        bordercolor="lightgray",
+                        borderwidth=1
+                    )
                 )
+                
                 return fig
 
             # ---------------------------------------------------------
@@ -238,26 +275,56 @@ class IcaoGraphs:
                         method="animate"
                     ))
 
-                # Итоговый Layout с Mapbox
+                # Итоговый Layout с Mapbox (для блока mode == 'animation')
                 fig.update_layout(
                     title=f"Интерактивная карта: {display_id}",
                     autosize=True,
                     hovermode='closest',
+                    # Делаем большой отступ снизу (b=100) для панели управления
+                    margin=dict(l=20, r=20, t=50, b=100), 
                     mapbox=dict(
-                        style="open-street-map", # Бесплатный стиль
+                        style="open-street-map",
                         center=dict(lat=np.mean(lats), lon=np.mean(lons)),
                         zoom=8
                     ),
+                    # Настройка кнопок управления
                     updatemenus=[dict(
-                        type="buttons", direction="left", x=0, y=1.05,
+                        type="buttons",
+                        direction="left",
+                        showactive=False,
+                        x=0.0, y=-0.1,
+                        xanchor="left", yanchor="top",
+                        pad=dict(r=10, t=0),
                         buttons=[
-                            dict(label="Play", method="animate", args=[None, dict(frame=dict(duration=50, redraw=True), fromcurrent=True)]),
-                            dict(label="Pause", method="animate", args=[[None], dict(frame=dict(duration=0, redraw=True), mode="immediate")])
+                            # Отмотка назад (Реверс)
+                            dict(label="⏪", method="animate", args=[None, dict(frame=dict(duration=150, redraw=True), transition=dict(duration=0), fromcurrent=True, mode="immediate", direction="reverse")]),
+                            # Пауза
+                            dict(label="⏸", method="animate", args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate")]),
+                            # Плей (нормальная скорость)
+                            dict(label="▶", method="animate", args=[None, dict(frame=dict(duration=150, redraw=True), transition=dict(duration=0), fromcurrent=True, mode="immediate", direction="forward")]),
+                            # Ускорение (Кадр каждые 30мс)
+                            dict(label="⏩", method="animate", args=[None, dict(frame=dict(duration=30, redraw=True), transition=dict(duration=0), fromcurrent=True, mode="immediate", direction="forward")])
                         ]
                     )],
-                    sliders=[dict(active=0, steps=slider_steps, x=0.1, len=0.9, pad=dict(t=50))],
-                    margin={"r":0,"t":50,"l":0,"b":0}
+                    # Настройка ползунка времени
+                    sliders=[dict(
+                        active=0,
+                        steps=slider_steps,
+                        x=0.25,              # Сдвигаем вправо, чтобы освободить место кнопкам
+                        y=-0.1,              # На тот же уровень, что и кнопки
+                        len=0.75,            # Занимает 75% ширины
+                        xanchor="left",
+                        yanchor="top",
+                        pad=dict(t=0, b=0),
+                        currentvalue=dict(visible=True, prefix="Время: ", font=dict(size=14))
+                    )],
+                    template="plotly_white"
                 )
+                
+                # Принудительно отключаем авто-изменение отступов для осей
+                fig.update_yaxes(automargin=False)
+                fig.update_xaxes(automargin=False)
+                
                 return fig
 
             # ---------------------------------------------------------
@@ -360,7 +427,21 @@ class IcaoGraphs:
                 fig.update_yaxes(type="log", row=2, col=1)
                 fig.update_yaxes(range=[-5, 110], row=3, col=1)
                 
-                fig.update_layout(title=f"Физические пределы качества: {display_id}", template="plotly_white", hovermode='x unified')
+                fig.update_layout(
+                    title=f"Физические пределы качества: {display_id}", 
+                    template="plotly_white", 
+                    hovermode='x unified',
+                    # --- ДОБАВИТЬ ЭТОТ БЛОК ---
+                    legend=dict(
+                        orientation="h",   # Горизонтальная ориентация
+                        yanchor="top",     # Привязка к верхнему краю легенды
+                        y=-0.1,            # Опускаем ниже графика (отрицательное значение)
+                        xanchor="center",  # Центрируем по X
+                        x=0.5              # Ставим ровно посередине
+                    ),
+                    margin=dict(b=80)      # Увеличиваем нижний отступ, чтобы легенда влезла
+                    # --------------------------
+                )
                 return fig
 
             # ---------------------------------------------------------
