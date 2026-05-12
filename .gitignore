@@ -1,0 +1,9 @@
+# Игнорировать кэш Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Игнорировать локальные настройки редакторов
+.vscode/
+.idea/ver2/data/stress_test.t4433
