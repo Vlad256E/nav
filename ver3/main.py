@@ -8,6 +8,7 @@ import config
 import decoder
 import utils
 from visual import IcaoGraphs
+from utils import timestamp_to_utc, format_timestamp_with_nanoseconds, choose_input_file, AnomalyDetector
 
 # --- MAIN ---
 if __name__ == '__main__':
@@ -242,10 +243,22 @@ if __name__ == '__main__':
                 if icao in icao_selected_altitude: icao_selected_altitude[icao].sort(key=lambda x: x[0])
                 if icao in icao_nic: icao_nic[icao].sort(key=lambda x: x[0])
 
-            # запуск визуализации
+            # === АВТОМАТИЧЕСКИЙ АНАЛИЗ АНОМАЛИЙ ===
+            detector = AnomalyDetector()
+            icao_anomalies = {}
+            for icao in adsb_icao_list:
+                anomalies = detector.detect(
+                    icao, 
+                    icao_altitude_difference.get(icao, []), 
+                    icao_nic.get(icao, [])
+                )
+                if anomalies:
+                    icao_anomalies[icao] = anomalies
+
+            # запуск визуализации (ПЕРЕДАЕМ icao_anomalies В КОНЦЕ)
             IcaoGraphs(icao_altitude, icao_speed, icao_positions, icao_courses, adsb_icao_list, icao_callsigns, 
                        icao_selected_altitude, icao_altitude_difference, icao_baro_correction, icao_gnss_altitude,
-                       icao_nic, icao_nacp, icao_gva, icao_sil, icao_nacv)
+                       icao_nic, icao_nacp, icao_gva, icao_sil, icao_nacv, icao_anomalies)
 
         except FileNotFoundError:
             print(f"Файл {file_path} не найден")
