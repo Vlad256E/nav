@@ -127,6 +127,76 @@ class IcaoGraphs:
                 {'if': {'column_id': 'Статус', 'filter_query': '{Статус} contains "Аномалия"'}, 'color': 'red', 'fontWeight': 'bold'}
             ]
         )
+    
+    def _group_anomalies(self, anomalies):
+        """Группирует аномалии по временным интервалам и типам."""
+        if not anomalies:
+            return []
+        
+        grouped = []
+        current_group = None
+        
+        for a in anomalies:
+            if current_group is None:
+                current_group = {
+                    'type': a['type'],
+                    'start_time': a['time'],
+                    'end_time': a['time'],
+                    'desc_list': [a['desc']],
+                    'values': []
+                }
+                if a['type'] == 'SPOOFING':
+                    import re
+                    match = re.search(r'(\d+) фт', a['desc'])
+                    if match:
+                        current_group['values'].append(int(match.group(1)))
+            else:
+                if current_group['type'] == a['type'] and (a['time'] - current_group['end_time']) <= 10:
+                    current_group['end_time'] = a['time']
+                    current_group['desc_list'].append(a['desc'])
+                    if a['type'] == 'SPOOFING':
+                        import re
+                        match = re.search(r'(\d+) фт', a['desc'])
+                        if match:
+                            current_group['values'].append(int(match.group(1)))
+                else:
+                    if current_group['type'] == 'SPOOFING':
+                        avg_diff = sum(current_group['values']) / len(current_group['values']) if current_group['values'] else 0
+                        desc = f"Аномальная разница высот: с {format_timestamp_with_nanoseconds(current_group['start_time'])} по {format_timestamp_with_nanoseconds(current_group['end_time'])} (средняя разница {avg_diff:.0f} фт)"
+                    else:
+                        desc = f"Падение NIC: с {format_timestamp_with_nanoseconds(current_group['start_time'])} по {format_timestamp_with_nanoseconds(current_group['end_time'])}"
+                    grouped.append({
+                        'type': current_group['type'],
+                        'desc': desc,
+                        'start': current_group['start_time'],
+                        'end': current_group['end_time']
+                    })
+                    current_group = {
+                        'type': a['type'],
+                        'start_time': a['time'],
+                        'end_time': a['time'],
+                        'desc_list': [a['desc']],
+                        'values': []
+                    }
+                    if a['type'] == 'SPOOFING':
+                        import re
+                        match = re.search(r'(\d+) фт', a['desc'])
+                        if match:
+                            current_group['values'].append(int(match.group(1)))
+        
+        if current_group:
+            if current_group['type'] == 'SPOOFING':
+                avg_diff = sum(current_group['values']) / len(current_group['values']) if current_group['values'] else 0
+                desc = f"Аномальная разница высот: с {format_timestamp_with_nanoseconds(current_group['start_time'])} по {format_timestamp_with_nanoseconds(current_group['end_time'])} (средняя разница {avg_diff:.0f} фт)"
+            else:
+                desc = f"Падение NIC: с {format_timestamp_with_nanoseconds(current_group['start_time'])} по {format_timestamp_with_nanoseconds(current_group['end_time'])}"
+            grouped.append({
+                'type': current_group['type'],
+                'desc': desc,
+                'start': current_group['start_time'],
+                'end': current_group['end_time']
+            })
+        return grouped
 
     # -----------------------------------------------------------------
     # Layout Dash
@@ -137,15 +207,14 @@ class IcaoGraphs:
             children=[
                 html.H2("Авиационный Навигационный Дашборд", style={'textAlign': 'center', 'color': '#2c3e50', 'marginBottom': '30px'}),
                 
-                # Панель выбора
-                html.Div(style={'display': 'flex', 'gap': '20px', 'marginBottom': '20px', 'justifyContent': 'center'}, children=[
+                html.Div(style={'display': 'flex', 'gap': '20px', 'marginBottom': '20px', 'flexWrap': 'wrap', 'justifyContent': 'center'}, children=[
                     html.Div([
                         html.Label("Борт (ICAO):", style={'fontWeight': 'bold', 'marginBottom': '5px', 'display': 'block'}),
                         dcc.Dropdown(
                             id='icao-dropdown',
                             options=[{'label': self.get_display_id(i), 'value': i} for i in self.icao_list],
                             value=self.icao_list[0] if self.icao_list else None,
-                            style={'width': '400px'}
+                            style={'width': '300px'}
                         )
                     ]),
                     html.Div([
@@ -162,23 +231,29 @@ class IcaoGraphs:
                                 {'label': 'Качество данных в % (HIL/HFOM/VFOM)', 'value': 'quality_percentages'}
                             ],
                             value='track',
-                            style={'width': '400px'}
+                            style={'width': '300px'}
                         )
                     ]),
+                    html.Div(id='mapbox-toggle-container', children=[
+                        html.Label("Реальная карта (Mapbox):", style={'fontWeight': 'bold', 'marginBottom': '5px', 'display': 'block'}),
+                        dcc.Checklist(
+                            id='mapbox-toggle',
+                            options=[{'label': 'Включить', 'value': 'mapbox'}],
+                            value=[]
+                        )
+                    ])
                 ]),
                 
-                # График
                 html.Div(style={
                     'backgroundColor': '#ffffff',               
                     'padding': '15px',                          
                     'borderRadius': '10px',                     
                     'boxShadow': '0 4px 8px rgba(0, 0, 0, 0.1)' 
                 }, children=[
-                    dcc.Graph(id='main-graph', style={'height': '60vh'})
+                    dcc.Graph(id='main-graph', style={'height': '90vh'}, config={'displayModeBar': True})
                 ]),
                 
-                # Две таблицы под графиком
-                html.Div(style={'display': 'flex', 'gap': '20px', 'marginTop': '20px'}, children=[
+                html.Div(id='tables-container', style={'display': 'flex', 'gap': '20px', 'marginTop': '20px'}, children=[
                     html.Div(style={'flex': '1', 'backgroundColor': '#ffffff', 'borderRadius': '10px', 'padding': '15px', 'boxShadow': '0 2px 4px rgba(0,0,0,0.1)'}, children=[
                         html.H3("Сводная информация по всем бортам", style={'textAlign': 'center'}),
                         html.Div(id='table-container')
@@ -198,49 +273,59 @@ class IcaoGraphs:
         @self.app.callback(
             [Output('main-graph', 'figure'),
              Output('table-container', 'children'),
-             Output('anomaly-table-content', 'children')],
+             Output('anomaly-table-content', 'children'),
+             Output('tables-container', 'style'),
+             Output('mapbox-toggle-container', 'style')],
             [Input('icao-dropdown', 'value'),
-             Input('mode-dropdown', 'value')]
+             Input('mode-dropdown', 'value'),
+             Input('mapbox-toggle', 'value')]
         )
-        def update_graph(icao, mode):
-            # Таблицы
+        def update_graph(icao, mode, mapbox_toggle):
+            if mode == 'track':
+                tables_style = {'display': 'flex', 'gap': '20px', 'marginTop': '20px'}
+                mapbox_style = {'display': 'block'}
+            else:
+                tables_style = {'display': 'none'}
+                mapbox_style = {'display': 'none'}
+            
             full_table = self.generate_styled_table()
+            
             anomaly_log = "Аномалий не обнаружено"
             if icao and icao in self.anomalies_dict:
-                anomalies = self.anomalies_dict[icao]
-                rows = [html.Tr([
-                    html.Td(format_timestamp_with_nanoseconds(a['time'])),
-                    html.Td(a['type'], style={'color': '#c0392b' if a['type'] == 'SPOOFING' else '#e67e22'}),
-                    html.Td(a['desc'])
-                ]) for a in anomalies]
-                anomaly_log = html.Table([
-                    html.Thead(html.Tr([html.Th("Время (UTC)"), html.Th("Тип"), html.Th("Описание")])),
-                    html.Tbody(rows)
-                ], style={'width': '100%', 'borderCollapse': 'collapse'})
+                grouped_anomalies = self._group_anomalies(self.anomalies_dict[icao])
+                if grouped_anomalies:
+                    rows = []
+                    for anom in grouped_anomalies:
+                        rows.append(html.Tr([
+                            html.Td(format_timestamp_with_nanoseconds(anom['start']) + " — " + format_timestamp_with_nanoseconds(anom['end']) if anom['start'] != anom['end'] else format_timestamp_with_nanoseconds(anom['start'])),
+                            html.Td(anom['type'], style={'color': '#c0392b' if anom['type'] == 'SPOOFING' else '#e67e22'}),
+                            html.Td(anom['desc'])
+                        ]))
+                    anomaly_log = html.Table([
+                        html.Thead(html.Tr([html.Th("Период (UTC)"), html.Th("Тип"), html.Th("Описание")])),
+                        html.Tbody(rows)
+                    ], style={'width': '100%', 'borderCollapse': 'collapse'})
             
             if not icao:
-                return go.Figure(), full_table, anomaly_log
+                return go.Figure(), full_table, anomaly_log, tables_style, mapbox_style
             
             display_id = self.get_display_id(icao)
             
-            # ---- Режим анимации (с использованием встроенных средств Plotly) ----
+            # ---------- АНИМАЦИЯ (исправленная) ----------
             if mode == 'animation':
                 pos_data = self.pos_dict.get(icao)
                 nic_data = self.nic_dict.get(icao)
                 if not pos_data or len(pos_data) < 2:
                     fig = go.Figure().add_annotation(text="Недостаточно данных для анимации", showarrow=False)
-                    return fig, full_table, anomaly_log
+                    return fig, full_table, anomaly_log, tables_style, mapbox_style
                 
                 pos_sorted = sorted(pos_data, key=lambda x: x[0])
-                # Ограничиваем количество кадров для производительности (не более 300)
                 step = max(1, len(pos_sorted) // 200)
                 pos_sorted = pos_sorted[::step]
                 lats = [lat for t, lat, lon in pos_sorted]
                 lons = [lon for t, lat, lon in pos_sorted]
                 times = [timestamp_to_utc(t) for t, lat, lon in pos_sorted]
-                time_strs = [t.strftime('%H:%M:%S') for t in times]
                 
-                # Синхронизация NIC
                 if nic_data:
                     nic_sorted = sorted(nic_data, key=lambda x: x[0])
                     synced_nics = []
@@ -250,51 +335,47 @@ class IcaoGraphs:
                 else:
                     synced_nics = [0] * len(lats)
                 
-                # Построение фигуры с кадрами
-                fig = make_subplots(rows=2, cols=1, row_heights=[0.7, 0.3],
+                fig = make_subplots(rows=2, cols=1, row_heights=[0.88, 0.12],
                                     specs=[[{"type": "mapbox"}], [{"type": "xy"}]],
-                                    vertical_spacing=0.1)
+                                    vertical_spacing=0.03)
                 
-                # Базовые трейсы (пустые, будут заполняться кадрами)
-                # Весь путь (серый фон)
+                # Весь путь
                 fig.add_trace(go.Scattermapbox(lat=lats, lon=lons, mode='lines',
-                                               line=dict(width=2, color='gray'), opacity=0.3,
+                                               line=dict(width=3, color='#1f77b4'), opacity=0.7,
                                                name='Весь путь'), row=1, col=1)
-                # Пройденный путь (будет меняться в кадрах)
-                fig.add_trace(go.Scattermapbox(lat=[lats[0]], lon=[lons[0]], mode='lines',
-                                               line=dict(width=4, color='blue'), name='Пройдено'), row=1, col=1)
-                # Текущая позиция
+                # Текущая позиция (начальная)
                 fig.add_trace(go.Scattermapbox(lat=[lats[0]], lon=[lons[0]], mode='markers',
-                                               marker=dict(size=12, color='red'), name='Текущая позиция'), row=1, col=1)
-                # График NIC (весь)
+                                               marker=dict(size=14, color='red'), name='Текущая позиция'), row=1, col=1)
+                # Пройденный путь (начальный)
+                fig.add_trace(go.Scattermapbox(lat=[lats[0]], lon=[lons[0]], mode='lines+markers',
+                                               line=dict(width=4, color='#ff7f0e'), marker=dict(size=6, color='#ff7f0e'),
+                                               name='Пройдено'), row=1, col=1)
+                # NIC линия
                 fig.add_trace(go.Scatter(x=times, y=synced_nics, mode='lines',
-                                         line=dict(color='orange', shape='vh'), name='Уровень NIC'), row=2, col=1)
-                # Маркер текущего NIC
+                                         line=dict(color='orange', width=2, shape='vh'), name='Уровень NIC'), row=2, col=1)
+                # Текущий NIC (начальный)
                 fig.add_trace(go.Scatter(x=[times[0]], y=[synced_nics[0]], mode='markers',
-                                         marker=dict(size=10, color='red'), name='Текущий NIC', showlegend=False), row=2, col=1)
+                                         marker=dict(size=10, color='red'), name='Текущий NIC'), row=2, col=1)
                 
-                # Создание кадров
                 frames = []
                 for i in range(len(lats)):
                     frame = go.Frame(
                         data=[
-                            # Обновляем пройденный путь (индекс 1)
-                            go.Scattermapbox(lat=lats[:i+1], lon=lons[:i+1]),
-                            # Обновляем позицию (индекс 2)
-                            go.Scattermapbox(lat=[lats[i]], lon=[lons[i]]),
-                            # Обновляем маркер NIC (индекс 4)
-                            go.Scatter(x=[times[i]], y=[synced_nics[i]])
+                            go.Scattermapbox(lat=lats[:i+1], lon=lons[:i+1], mode='lines+markers',
+                                             line=dict(width=4, color='#ff7f0e'), marker=dict(size=6, color='#ff7f0e')),
+                            go.Scattermapbox(lat=[lats[i]], lon=[lons[i]], mode='markers',
+                                             marker=dict(size=14, color='red')),
+                            go.Scatter(x=[times[i]], y=[synced_nics[i]], mode='markers', marker=dict(size=10, color='red'))
                         ],
                         name=str(i),
-                        traces=[1, 2, 4]  # какие трейсы заменять
+                        traces=[2, 1, 4]   # индексы трейсов: пройдено (2), позиция (1), текущий NIC (4)
                     )
                     frames.append(frame)
                 fig.frames = frames
                 
-                # Настройки анимации
                 fig.update_layout(
                     title=f"Анимация полета: {display_id}",
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1),
                     mapbox=dict(style="open-street-map",
                                 center=dict(lat=sum(lats)/len(lats), lon=sum(lons)/len(lons)),
                                 zoom=9),
@@ -304,73 +385,108 @@ class IcaoGraphs:
                         buttons=[
                             dict(label="Play",
                                  method="animate",
-                                 args=[None, dict(frame=dict(duration=50, redraw=True), fromcurrent=True)]),
+                                 args=[None, dict(frame=dict(duration=100, redraw=True), fromcurrent=True, mode='immediate')]),
                             dict(label="Pause",
                                  method="animate",
-                                 args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate")])
+                                 args=[[None], dict(frame=dict(duration=0, redraw=False), mode='immediate')])
                         ],
                         pad={"r": 10, "t": 10},
                         x=0.01,
-                        y=1.1,
+                        y=1.12,
                         xanchor="left",
                         yanchor="top"
                     )],
                     sliders=[{
+                        "active": 0,
+                        "yanchor": "top",
+                        "xanchor": "left",
                         "currentvalue": {"prefix": "Кадр: "},
+                        "pad": {"t": 50},
                         "steps": [
                             {"args": [[str(i)], {"frame": {"duration": 0, "redraw": True}, "mode": "immediate"}],
                              "label": str(i), "method": "animate"}
                             for i in range(len(lats))
                         ]
-                    }]
+                    }],
+                    modebar=dict(orientation='v', bgcolor='rgba(255,255,255,0.7)')
                 )
-                fig.update_xaxes(range=[times[0], times[-1]], row=2, col=1)
-                fig.update_yaxes(range=[-0.5, 12.5], title="NIC", row=2, col=1)
+                fig.update_xaxes(fixedrange=True, row=2, col=1)
+                fig.update_yaxes(fixedrange=True, title="NIC", range=[-0.5, 12.5], row=2, col=1)
                 
-                return fig, full_table, anomaly_log
+                return fig, full_table, anomaly_log, tables_style, mapbox_style
             
-            # ---- Все остальные режимы (без анимации) ----
-            return self._build_normal_figure(icao, mode, display_id), full_table, anomaly_log
+            # ---------- СХЕМА ТРЕКА (общая карта) ----------
+            if mode == 'track':
+                if not self.pos_dict:
+                    fig = go.Figure().add_annotation(text="Нет данных координат", showarrow=False)
+                    return fig, full_table, anomaly_log, tables_style, mapbox_style
+                
+                use_mapbox = 'mapbox' in mapbox_toggle
+                
+                if use_mapbox:
+                    fig = go.Figure()
+                    for track_icao, track_data in self.pos_dict.items():
+                        if track_icao not in self.icao_list or track_icao == icao:
+                            continue
+                        lats = [lat for t, lat, lon in track_data]
+                        lons = [lon for t, lat, lon in track_data]
+                        fig.add_trace(go.Scattermapbox(lat=lats, lon=lons, mode='lines',
+                                                       line=dict(width=2, color='#a0a0a0'), opacity=0.8,
+                                                       hoverinfo='text', text=[f"Борт: {track_icao}"]*len(lons),
+                                                       showlegend=False))
+                    curr_data = self.pos_dict.get(icao)
+                    if curr_data:
+                        lats = [lat for t, lat, lon in curr_data]
+                        lons = [lon for t, lat, lon in curr_data]
+                        times = [timestamp_to_utc(t).strftime('%H:%M:%S') for t, lat, lon in curr_data]
+                        fig.add_trace(go.Scattermapbox(lat=lats, lon=lons, mode='lines+markers',
+                                                       marker=dict(size=6, color='#d62728'), line=dict(width=3, color='#d62728'),
+                                                       text=times, name=display_id))
+                    all_lats = [lat for tdata in self.pos_dict.values() for t, lat, lon in tdata]
+                    all_lons = [lon for tdata in self.pos_dict.values() for t, lat, lon in tdata]
+                    center_lat = sum(all_lats)/len(all_lats) if all_lats else 0
+                    center_lon = sum(all_lons)/len(all_lons) if all_lons else 0
+                    fig.update_layout(
+                        title="ОБЩАЯ КАРТА (Все обнаруженные треки) — реальная карта",
+                        mapbox=dict(style="open-street-map", center=dict(lat=center_lat, lon=center_lon), zoom=8),
+                        margin=dict(l=0, r=0, t=40, b=0),
+                        legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
+                        modebar=dict(orientation='v')
+                    )
+                else:
+                    fig = go.Figure()
+                    for track_icao, track_data in self.pos_dict.items():
+                        if track_icao not in self.icao_list or track_icao == icao:
+                            continue
+                        lats = [lat for t, lat, lon in track_data]
+                        lons = [lon for t, lat, lon in track_data]
+                        fig.add_trace(go.Scatter(x=lons, y=lats, mode='lines',
+                                                 line=dict(width=2, color='#a0a0a0'), opacity=0.8,
+                                                 hoverinfo='text', text=[f"Борт: {track_icao}"]*len(lons),
+                                                 showlegend=False))
+                    curr_data = self.pos_dict.get(icao)
+                    if curr_data:
+                        lats = [lat for t, lat, lon in curr_data]
+                        lons = [lon for t, lat, lon in curr_data]
+                        times = [timestamp_to_utc(t).strftime('%H:%M:%S') for t, lat, lon in curr_data]
+                        fig.add_trace(go.Scatter(x=lons, y=lats, mode='lines+markers',
+                                                 marker=dict(size=5, color='#d62728'), line=dict(width=3, color='#d62728'),
+                                                 text=times, name=display_id))
+                    fig.update_layout(title="ОБЩАЯ КАРТА (Все обнаруженные треки)",
+                                      xaxis_title="Долгота", yaxis_title="Широта",
+                                      yaxis=dict(scaleanchor="x", scaleratio=1),
+                                      template="plotly_white", hovermode='closest')
+                return fig, full_table, anomaly_log, tables_style, mapbox_style
+            
+            # ---------- ОСТАЛЬНЫЕ РЕЖИМЫ ----------
+            fig = self._build_normal_figure(icao, mode, display_id)
+            return fig, full_table, anomaly_log, tables_style, mapbox_style
     
     # -----------------------------------------------------------------
-    # Построение графиков для всех режимов, кроме анимации
+    # Построение графиков для остальных режимов
     # -----------------------------------------------------------------
     def _build_normal_figure(self, icao, mode, display_id):
-        if mode == 'track':
-            # Общая карта со всеми треками
-            if not self.pos_dict:
-                fig = go.Figure()
-                fig.add_annotation(text="Нет данных координат", showarrow=False)
-                return fig
-            fig = go.Figure()
-            # Фоновые треки (серые)
-            for track_icao, track_data in self.pos_dict.items():
-                if track_icao not in self.icao_list or track_icao == icao:
-                    continue
-                lats = [lat for t, lat, lon in track_data]
-                lons = [lon for t, lat, lon in track_data]
-                fig.add_trace(go.Scatter(x=lons, y=lats, mode='lines',
-                                         line=dict(width=1, color='grey'), opacity=0.6,
-                                         hoverinfo='text', text=[f"Борт: {track_icao}"]*len(lons),
-                                         showlegend=False))
-            # Текущий трек
-            curr_data = self.pos_dict.get(icao)
-            if curr_data:
-                lats = [lat for t, lat, lon in curr_data]
-                lons = [lon for t, lat, lon in curr_data]
-                times = [timestamp_to_utc(t).strftime('%H:%M:%S') for t, lat, lon in curr_data]
-                fig.add_trace(go.Scatter(x=lons, y=lats, mode='lines+markers',
-                                         marker=dict(size=4, color='red'), line=dict(width=2, color='red'),
-                                         text=times, name=display_id))
-            fig.update_layout(title="ОБЩАЯ КАРТА (Все обнаруженные треки)",
-                              xaxis_title="Долгота", yaxis_title="Широта",
-                              yaxis=dict(scaleanchor="x", scaleratio=1),
-                              template="plotly_white", hovermode='closest',
-                              legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99,
-                                          bgcolor="rgba(255,255,255,0.8)", bordercolor="lightgray"))
-            return fig
-        
-        elif mode == 'kinematics':
+        if mode == 'kinematics':
             fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
                                 subplot_titles=("Высота (фт)", "Скорость (узлы)", "Курс (°)"))
             times, vals = self.get_times_values(self.alt_dict.get(icao))
@@ -469,7 +585,6 @@ class IcaoGraphs:
             )
             return fig
         
-        # Fallback
         fig = go.Figure()
         fig.add_annotation(text=f"Режим {mode} не реализован", showarrow=False)
         return fig

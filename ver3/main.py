@@ -62,7 +62,7 @@ if __name__ == '__main__':
                     if not line.strip(): continue # пропуск пустых строк
                     parsed = decoder.parse_ads_b_line(line)
                     if parsed is None: continue
-                    msg, message_spaced, message_str = parsed
+                    msg, message_str = parsed
 
                     try:
                         aa = pms.icao(message_str)
@@ -248,9 +248,14 @@ if __name__ == '__main__':
             icao_anomalies = {}
             for icao in adsb_icao_list:
                 anomalies = detector.detect(
-                    icao, 
-                    icao_altitude_difference.get(icao, []), 
-                    icao_nic.get(icao, [])
+                    icao,
+                    icao_altitude_difference.get(icao, []),
+                    icao_nic.get(icao, []),
+                    pos_data=icao_positions.get(icao, []),
+                    speed_data=icao_speed.get(icao, []),
+                    course_data=icao_courses.get(icao, []),
+                    alt_data=icao_altitude.get(icao, []),
+                    nacp_data=icao_nacp.get(icao, [])
                 )
                 if anomalies:
                     icao_anomalies[icao] = anomalies
