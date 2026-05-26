@@ -1,10 +1,11 @@
 from dataclasses import dataclass, field
 from collections import defaultdict
-from typing import Dict, List, Set, Any
+from typing import Dict, List, Set, Any, Tuple
+
 
 @dataclass
 class FlightData:
-    """Хранит все данные, полученные в результате парсинга лог-файла."""
+    """хранит все данные, полученные в результате парсинга лог-файла"""
     icao_times: Dict[str, Dict[str, float]] = field(default_factory=dict)
     icao_altitude: Dict[str, List[tuple]] = field(default_factory=lambda: defaultdict(list))
     icao_gnss_altitude: Dict[str, List[tuple]] = field(default_factory=lambda: defaultdict(list))
@@ -24,3 +25,4 @@ class FlightData:
     icao_sil: Dict[str, List[tuple]] = field(default_factory=lambda: defaultdict(list))
     icao_nacv: Dict[str, List[tuple]] = field(default_factory=lambda: defaultdict(list))
     icao_nic_baro: Dict[str, Any] = field(default_factory=dict)
+    icao_messages: Dict[str, List[Tuple[float, int]]] = field(default_factory=lambda: defaultdict(list))
