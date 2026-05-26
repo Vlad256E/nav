@@ -187,6 +187,28 @@ class IcaoGraphs:
         grouped = self._group_anomalies(self.anomalies_dict[icao])
         return [(g['start'], g['end']) for g in grouped]
 
+    def _get_anomaly_description(self, icao):
+        """возвращает человекочитаемое описание статуса аномалии для бейджа"""
+        if icao not in self.anomalies_dict:
+            return "ГНСС стабильна", "normal"
+        grouped = self._group_anomalies(self.anomalies_dict[icao])
+        if not grouped:
+            return "ГНСС стабильна", "normal"
+        # Собираем уникальные типы
+        types = set()
+        for g in grouped:
+            types.add(g['type'])
+        if 'SPOOFING' in types and len(types) > 1:
+            return "ВНИМАНИЕ: Обнаружена подмена координат и другие аномалии", "critical"
+        if 'SPOOFING' in types:
+            return "ВНИМАНИЕ: Обнаружена подмена координат", "critical"
+        if 'JAMMING' in types:
+            return "ВНИМАНИЕ: Обнаружено подавление сигнала", "critical"
+        if 'MULTIFACTOR' in types:
+            return "ВНИМАНИЕ: Комплексная аномалия навигации", "critical"
+        # fallback
+        return "Обнаружена аномалия", "critical"
+
     def _add_anomaly_vrects(self, fig, icao, xaxis_ref='x'):
         """добавляет вертикальные красные прямоугольники на график по временным интервалам аномалий"""
         ranges = self._get_anomaly_time_ranges(icao)
@@ -231,10 +253,14 @@ class IcaoGraphs:
             children=[
                 html.H2("Авиационный Навигационный Дашборд", style={'textAlign': 'center', 'color': '#2c3e50', 'marginBottom': '30px'}),
                 dcc.Store(id='zoom-store', data={}),
-                html.Div(style={'display': 'flex', 'gap': '20px', 'marginBottom': '20px', 'flexWrap': 'wrap', 'justifyContent': 'center'}, children=[
+                html.Div(style={'display': 'flex', 'gap': '20px', 'marginBottom': '20px', 'flexWrap': 'wrap', 'justifyContent': 'center', 'alignItems': 'flex-end'}, children=[
                     html.Div([
                         html.Label("Борт (ICAO):", style={'fontWeight': 'bold', 'marginBottom': '5px', 'display': 'block'}),
                         dcc.Dropdown(id='icao-dropdown', options=[{'label': self.get_display_id(i), 'value': i} for i in self.icao_list], value=self.icao_list[0] if self.icao_list else None, style={'width': '300px'})
+                    ]),
+                    html.Div([
+                        html.Label("Статус:", style={'fontWeight': 'bold', 'marginBottom': '5px', 'display': 'block'}),
+                        html.Div(id='status-badge', style={'padding': '8px 16px', 'borderRadius': '20px', 'fontWeight': 'bold', 'fontSize': '16px', 'backgroundColor': '#28a745', 'color': 'white', 'display': 'inline-block'})
                     ]),
                     html.Div([
                         html.Label("Режим экрана:", style={'fontWeight': 'bold', 'marginBottom': '5px', 'display': 'block'}),
@@ -251,7 +277,7 @@ class IcaoGraphs:
                             {'label': 'Интенсивность сообщений (Message Rate) – Jamming', 'value': 'message_rate'}
                         ], value='track', style={'width': '300px'})
                     ]),
-                    html.Div(id='mapbox-toggle-container', children=[
+                    html.Div(id='mapbox-toggle-container', style={'marginBottom': '0'}, children=[
                         html.Label("Реальная карта (Mapbox):", style={'fontWeight': 'bold', 'marginBottom': '5px', 'display': 'block'}),
                         dcc.Checklist(id='mapbox-toggle', options=[{'label': 'Включить', 'value': 'mapbox'}], value=[])
                     ])
@@ -324,6 +350,22 @@ class IcaoGraphs:
         return best[1]
 
     def setup_callbacks(self):
+        # Callback для обновления статус-бейджа
+        @self.app.callback(
+            Output('status-badge', 'children'),
+            Output('status-badge', 'style'),
+            Input('icao-dropdown', 'value')
+        )
+        def update_status_badge(icao):
+            if not icao:
+                return "ГНСС стабильна", {'padding': '8px 16px', 'borderRadius': '20px', 'fontWeight': 'bold', 'fontSize': '16px', 'backgroundColor': '#28a745', 'color': 'white', 'display': 'inline-block'}
+            text, status = self._get_anomaly_description(icao)
+            if status == 'critical':
+                style = {'padding': '8px 16px', 'borderRadius': '20px', 'fontWeight': 'bold', 'fontSize': '16px', 'backgroundColor': '#dc3545', 'color': 'white', 'display': 'inline-block'}
+            else:
+                style = {'padding': '8px 16px', 'borderRadius': '20px', 'fontWeight': 'bold', 'fontSize': '16px', 'backgroundColor': '#28a745', 'color': 'white', 'display': 'inline-block'}
+            return text, style
+
         @self.app.callback(
             [Output('main-graph', 'figure'),
              Output('table-container', 'children'),
@@ -403,7 +445,6 @@ class IcaoGraphs:
                     line_color = 'red' if is_anomaly_segment else current_nic_color
                     lats = [p[1] for p in points[i:j]]
                     lons = [p[2] for p in points[i:j]]
-                    times_seg = [p[0] for p in points[i:j]]
                     # hovertext
                     hover_text = [f"время: {timestamp_to_utc(t).strftime('%H:%M:%S')}<br>nic: {nic}" for t,lat,lon,nic in points[i:j]]
                     if use_mapbox:
@@ -440,24 +481,24 @@ class IcaoGraphs:
                 if use_mapbox:
                     center = (sum(p[1] for p in points)/len(points), sum(p[2] for p in points)/len(points))
                     fig.update_layout(
-                        title=f"трек борта {display_id} с цветовой индикацией nic (красный – аномалия)",
+                        title=dict(text="ТРЕК БОРТА С ЦВЕТОВОЙ ИНДИКАЦИЕЙ NIC", x=0.5, xanchor='center'),
                         mapbox=dict(style="open-street-map", center=dict(lat=center[0], lon=center[1]), zoom=9),
                         margin=dict(l=0, r=150, t=40, b=0),
                         legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02)
                     )
                 else:
                     fig.update_layout(
-                        title=f"трек борта {display_id} с цветовой индикацией nic (красный – аномалия)",
+                        title=dict(text="ТРЕК БОРТА С ЦВЕТОВОЙ ИНДИКАЦИЕЙ NIC", x=0.5, xanchor='center'),
                         xaxis_title="долгота", yaxis_title="широта",
                         yaxis=dict(scaleanchor="x", scaleratio=1),
                         template="plotly_white", hovermode='closest', margin=dict(r=150),
                         legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02)
                     )
                 # легенда
-                for item in [go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color='green'), name='nic ≥ 10 (отлично)'),
-                             go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color='orange'), name='nic 7–9 (средне)'),
-                             go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color='red'), name='nic ≤ 6 или аномалия'),
-                             go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color='lightgray'), name='nic нет данных')]:
+                for item in [go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color='green'), name='NIC ≥ 10 (отлично)'),
+                             go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color='orange'), name='NIC 7–9 (средне)'),
+                             go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color='red'), name='NIC ≤ 6 ИЛИ АНОМАЛИЯ'),
+                             go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color='lightgray'), name='NIC нет данных')]:
                     fig.add_trace(item)
                 return fig, full_table, anomaly_rows, tables_style, mapbox_style
 
@@ -503,19 +544,26 @@ class IcaoGraphs:
                             lats = [lat for t, lat, lon in curr_sorted[i:j]]
                             lons = [lon for t, lat, lon in curr_sorted[i:j]]
                             times = [timestamp_to_utc(t).strftime('%H:%M:%S') for t, lat, lon in curr_sorted[i:j]]
-                            line_color = 'red' if is_anomaly else '#d62728'
+                            # цвет: красный для аномалии, синий для нормы
+                            line_color = 'red' if is_anomaly else '#1f77b4'
+                            name = display_id if not is_anomaly else f"{display_id} (АНОМАЛИЯ)"
                             fig.add_trace(go.Scattermapbox(
                                 lat=lats, lon=lons, mode='lines+markers',
                                 marker=dict(size=6, color=line_color),
                                 line=dict(width=3, color=line_color),
-                                text=times, name=display_id if not is_anomaly else f"{display_id} (аномалия)"
+                                text=times, name=name
                             ))
                             i = j
+                    # добавляем поясняющий элемент в легенду
+                    fig.add_trace(go.Scattermapbox(
+                        lat=[None], lon=[None], mode='lines',
+                        line=dict(width=3, color='red'), name='Аномальный сегмент'
+                    ))
                     all_lats = [lat for tdata in self.pos_dict.values() for t, lat, lon in tdata]
                     all_lons = [lon for tdata in self.pos_dict.values() for t, lat, lon in tdata]
                     center_lat, center_lon = sum(all_lats)/len(all_lats), sum(all_lons)/len(all_lons)
                     fig.update_layout(
-                        title="общая карта (все обнаруженные треки) — реальная карта, красный – аномалия",
+                        title=dict(text="ОБЩАЯ КАРТА (ВСЕ ОБНАРУЖЕННЫЕ ТРЕКИ)", x=0.5, xanchor='center'),
                         mapbox=dict(style="open-street-map", center=dict(lat=center_lat, lon=center_lon), zoom=8),
                         margin=dict(l=0, r=0, t=40, b=0),
                         legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
@@ -550,14 +598,19 @@ class IcaoGraphs:
                             lats = [lat for t, lat, lon in curr_sorted[i:j]]
                             lons = [lon for t, lat, lon in curr_sorted[i:j]]
                             times = [timestamp_to_utc(t).strftime('%H:%M:%S') for t, lat, lon in curr_sorted[i:j]]
-                            line_color = 'red' if is_anomaly else '#d62728'
+                            line_color = 'red' if is_anomaly else '#1f77b4'
+                            name = display_id if not is_anomaly else f"{display_id} (АНОМАЛИЯ)"
                             fig.add_trace(go.Scatter(
                                 x=lons, y=lats, mode='lines+markers', marker=dict(size=5, color=line_color),
-                                line=dict(width=3, color=line_color), text=times, name=display_id if not is_anomaly else f"{display_id} (аномалия)"
+                                line=dict(width=3, color=line_color), text=times, name=name
                             ))
                             i = j
+                    fig.add_trace(go.Scatter(
+                        x=[None], y=[None], mode='lines',
+                        line=dict(width=3, color='red'), name='Аномальный сегмент'
+                    ))
                     fig.update_layout(
-                        title="общая карта (все обнаруженные треки), красный – аномалия",
+                        title=dict(text="ОБЩАЯ КАРТА (ВСЕ ОБНАРУЖЕННЫЕ ТРЕКИ)", x=0.5, xanchor='center'),
                         xaxis_title="долгота", yaxis_title="широта", yaxis=dict(scaleanchor="x", scaleratio=1),
                         template="plotly_white", hovermode='closest'
                     )
@@ -592,7 +645,7 @@ class IcaoGraphs:
     def _build_normal_figure(self, icao, mode, display_id):
         # режим кинематики
         if mode == 'kinematics':
-            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05, subplot_titles=("высота (фт)", "скорость (узлы)", "курс (°)"))
+            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05, subplot_titles=("ВЫСОТА (ФТ)", "СКОРОСТЬ (УЗЛЫ)", "КУРС (°)"))
             times, vals = self.get_times_values(self.alt_dict.get(icao))
             if times:
                 fig.add_trace(go.Scatter(x=times, y=vals, mode='lines+markers', name='baro alt', marker=dict(size=4, color='blue')), row=1, col=1)
@@ -609,13 +662,13 @@ class IcaoGraphs:
             if times:
                 fig.add_trace(go.Scatter(x=times, y=vals, mode='lines+markers', name='курс', marker=dict(size=4, color='purple')), row=3, col=1)
             fig.update_yaxes(range=[-10, 370], tickvals=[0,90,180,270,360], row=3, col=1)
-            fig.update_layout(title=f"кинематика полета: {display_id}", template="plotly_white", hovermode='x unified')
+            fig.update_layout(title=dict(text=f"КИНЕМАТИКА ПОЛЁТА: {display_id}", x=0.5, xanchor='center'), template="plotly_white", hovermode='x unified')
             self._add_anomaly_vrects(fig, icao)
             return fig
 
         # категории целостности и точности
         if mode == 'integrity_and_accuracy':
-            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05, subplot_titles=("nic / sil", "nacp / gva", "nacv"))
+            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05, subplot_titles=("NIC / SIL", "NACP / GVA", "NACV"))
             times, vals = self.get_times_values(self.nic_dict.get(icao))
             if times:
                 fig.add_trace(go.Scatter(x=times, y=vals, mode='lines', name='nic (0-11)', line=dict(color='darkcyan', width=2, shape='vh'), fill='tozeroy', fillcolor='rgba(0,255,255,0.1)'), row=1, col=1)
@@ -634,13 +687,13 @@ class IcaoGraphs:
             fig.update_yaxes(range=[0,12], tickvals=list(range(0,13,2)), row=1, col=1)
             fig.update_yaxes(range=[0,12], tickvals=list(range(0,13,2)), row=2, col=1)
             fig.update_yaxes(range=[0,4], tickvals=list(range(0,5)), row=3, col=1)
-            fig.update_layout(title=f"категории качества сигналов: {display_id}", template="plotly_white", hovermode='x unified')
+            fig.update_layout(title=dict(text=f"КАТЕГОРИИ КАЧЕСТВА СИГНАЛОВ: {display_id}", x=0.5, xanchor='center'), template="plotly_white", hovermode='x unified')
             self._add_anomaly_vrects(fig, icao)
             return fig
 
         # метрики в метрах (hil, hfom, vfom)
         if mode == 'quality_metrics':
-            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.07, subplot_titles=("hil (nic)", "hfom (nacp)", "vfom (gva)"))
+            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.07, subplot_titles=("HIL (NIC)", "HFOM (NACP)", "VFOM (GVA)"))
             def add_metric(data_dict, mapping, zero_label, row, color):
                 data = data_dict.get(icao)
                 if not data:
@@ -657,15 +710,15 @@ class IcaoGraphs:
                         texts.append(f"{v_m} м")
                 fig.add_trace(go.Scatter(x=times, y=vals, hovertext=texts, mode='lines+markers', name=color, line=dict(color=color)), row=row, col=1)
             add_metric(self.nic_dict, NIC_TO_HIL, "≥ 20 nm (37.04 км) или неизвестно", 1, 'red')
-            add_metric(self.nacp_dict, NACP_TO_HFOM, "hfom ≥ 18.52 км", 2, 'blue')
+            add_metric(self.nacp_dict, NACP_TO_HFOM, "HFOM ≥ 18.52 км", 2, 'blue')
             add_metric(self.gva_dict, GVA_TO_VFOM, "неизвестно или ≥10 м/с", 3, 'green')
-            fig.update_layout(height=800, title_text=f"параметры точности: {display_id}", template="plotly_white")
+            fig.update_layout(height=800, title=dict(text=f"ПАРАМЕТРЫ ТОЧНОСТИ: {display_id}", x=0.5, xanchor='center'), template="plotly_white")
             self._add_anomaly_vrects(fig, icao)
             return fig
 
         # барометрический анализ
         if mode == 'baro_analysis':
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, subplot_titles=("разница высот gnss vs baro (фт)", "барокоррекция (гПа)"))
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, subplot_titles=("РАЗНИЦА ВЫСОТ GNSS VS BARO (ФТ)", "БАРОКОРРЕКЦИЯ (ГПА)"))
             times, vals = self.get_times_values(self.alt_diff_dict.get(icao))
             if times:
                 fig.add_trace(go.Scatter(x=times, y=vals, mode='lines+markers', name='разница (фт)', marker=dict(size=4, color='red')), row=1, col=1)
@@ -673,7 +726,7 @@ class IcaoGraphs:
             times, vals = self.get_times_values(self.baro_correction_dict.get(icao))
             if times:
                 fig.add_trace(go.Scatter(x=times, y=vals, mode='lines+markers', name='давление', marker=dict(size=4, color='brown')), row=2, col=1)
-            fig.update_layout(title=f"барометрический анализ: {display_id}", template="plotly_white", hovermode='x unified')
+            fig.update_layout(title=dict(text=f"БАРОМЕТРИЧЕСКИЙ АНАЛИЗ: {display_id}", x=0.5, xanchor='center'), template="plotly_white", hovermode='x unified')
             self._add_anomaly_vrects(fig, icao)
             return fig
 
@@ -683,17 +736,17 @@ class IcaoGraphs:
             if icao in self.nic_dict:
                 times, vals = self.get_times_values(self.nic_dict[icao])
                 percent_vals = [NIC_TO_PERCENT.get(v, 0) for v in vals]
-                fig.add_trace(go.Scatter(x=times, y=percent_vals, mode='lines+markers', name='hil (%)', line=dict(color='red', width=2, shape='hv')))
+                fig.add_trace(go.Scatter(x=times, y=percent_vals, mode='lines+markers', name='HIL (%)', line=dict(color='red', width=2, shape='hv')))
             if icao in self.nacp_dict:
                 times, vals = self.get_times_values(self.nacp_dict[icao])
                 percent_vals = [NACP_TO_PERCENT.get(v, 0) for v in vals]
-                fig.add_trace(go.Scatter(x=times, y=percent_vals, mode='lines+markers', name='hfom (%)', line=dict(color='blue', width=2, shape='hv')))
+                fig.add_trace(go.Scatter(x=times, y=percent_vals, mode='lines+markers', name='HFOM (%)', line=dict(color='blue', width=2, shape='hv')))
             if icao in self.gva_dict:
                 times, vals = self.get_times_values(self.gva_dict[icao])
                 percent_vals = [GVA_TO_PERCENT.get(v, 0) for v in vals]
-                fig.add_trace(go.Scatter(x=times, y=percent_vals, mode='lines+markers', name='vfom (%)', line=dict(color='purple', width=2, dash='dash')))
-            fig.update_layout(title=f"качество данных в процентах: {display_id}", yaxis_title="качество (%)", yaxis_range=[-5, 105], template="plotly_white", hovermode='x unified')
-            fig.add_annotation(text="hil: <7.5м → 37км\nhfom: <3м → >18.5км\nvfom: ≤45м → ≥150м", xref="paper", yref="paper", x=0.02, y=0.05, showarrow=False, font=dict(size=10), bgcolor="white", bordercolor="gray", borderwidth=1)
+                fig.add_trace(go.Scatter(x=times, y=percent_vals, mode='lines+markers', name='VFOM (%)', line=dict(color='purple', width=2, dash='dash')))
+            fig.update_layout(title=dict(text=f"КАЧЕСТВО ДАННЫХ В ПРОЦЕНТАХ: {display_id}", x=0.5, xanchor='center'), yaxis_title="качество (%)", yaxis_range=[-5, 105], template="plotly_white", hovermode='x unified')
+            fig.add_annotation(text="HIL: <7.5м → 37км\nHFOM: <3м → >18.5км\nVFOM: ≤45м → ≥150м", xref="paper", yref="paper", x=0.02, y=0.05, showarrow=False, font=dict(size=10), bgcolor="white", bordercolor="gray", borderwidth=1)
             self._add_anomaly_vrects(fig, icao)
             return fig
 
@@ -702,7 +755,7 @@ class IcaoGraphs:
             fig = go.Figure()
             times, gs_vals = self.get_times_values(self.spd_dict.get(icao))
             if times:
-                fig.add_trace(go.Scatter(x=times, y=gs_vals, mode='lines+markers', name='заявленная gs (узлы)', line=dict(color='green', width=2), marker=dict(size=4)))
+                fig.add_trace(go.Scatter(x=times, y=gs_vals, mode='lines+markers', name='заявленная GS (узлы)', line=dict(color='green', width=2), marker=dict(size=4)))
             pos_data = self.pos_dict.get(icao)
             if pos_data and len(pos_data) >= 2:
                 calc_speeds = self._compute_ground_speed_from_positions(pos_data)
@@ -710,7 +763,7 @@ class IcaoGraphs:
                     calc_times, calc_vals = zip(*calc_speeds)
                     calc_times_utc = [timestamp_to_utc(t) for t in calc_times]
                     fig.add_trace(go.Scatter(x=calc_times_utc, y=calc_vals, mode='lines+markers', name='скорость по координатам (узлы)', line=dict(color='red', width=2, dash='dash'), marker=dict(size=4)))
-            fig.update_layout(title=f"сравнение скоростей (спуфинг-анализ): {display_id}", xaxis_title="время (utc)", yaxis_title="скорость (узлы)", template="plotly_white", hovermode='x unified')
+            fig.update_layout(title=dict(text=f"СРАВНЕНИЕ СКОРОСТЕЙ (СПУФИНГ-АНАЛИЗ): {display_id}", x=0.5, xanchor='center'), xaxis_title="время (UTC)", yaxis_title="скорость (узлы)", template="plotly_white", hovermode='x unified')
             self._add_anomaly_vrects(fig, icao)
             return fig
 
@@ -718,7 +771,7 @@ class IcaoGraphs:
         if mode == 'jamming_activity':
             messages = self.messages_dict.get(icao, [])
             if not messages:
-                fig = go.Figure().add_annotation(text="нет данных о сообщениях df", showarrow=False)
+                fig = go.Figure().add_annotation(text="нет данных о сообщениях DF", showarrow=False)
                 return fig
             df_messages = {}
             for ts, df in messages:
@@ -732,16 +785,16 @@ class IcaoGraphs:
                     x=times_utc,
                     y=[df] * len(timestamps),
                     mode='markers',
-                    name=f'df{df}',
+                    name=f'DF{df}',
                     marker=dict(size=8, opacity=0.7),
-                    text=[f'df{df}<br>{timestamp_to_utc(ts).strftime("%H:%M:%S.%f")[:-3]}' for ts in timestamps],
+                    text=[f'DF{df}<br>{timestamp_to_utc(ts).strftime("%H:%M:%S.%f")[:-3]}' for ts in timestamps],
                     hoverinfo='text'
                 ))
             fig.update_layout(
-                title=f"активность сообщений по типам df: {display_id}",
-                xaxis_title="время (utc)",
-                yaxis_title="тип сообщения (df)",
-                yaxis=dict(tickmode='array', tickvals=df_order, ticktext=[f'df{df}' for df in df_order]),
+                title=dict(text=f"АКТИВНОСТЬ СООБЩЕНИЙ ПО ТИПАМ DF: {display_id}", x=0.5, xanchor='center'),
+                xaxis_title="время (UTC)",
+                yaxis_title="тип сообщения (DF)",
+                yaxis=dict(tickmode='array', tickvals=df_order, ticktext=[f'DF{df}' for df in df_order]),
                 template="plotly_white",
                 hovermode='closest'
             )
@@ -777,14 +830,14 @@ class IcaoGraphs:
                 line=dict(color='red', width=2, dash='dash'), marker=dict(size=4)
             ))
             fig.update_layout(
-                title=f"Интенсивность сообщений (Message Rate) – {display_id}",
+                title=dict(text=f"ИНТЕНСИВНОСТЬ СООБЩЕНИЙ (MESSAGE RATE): {display_id}", x=0.5, xanchor='center'),
                 xaxis_title="время (UTC)",
-                yaxis_title="Сообщений в секунду",
+                yaxis_title="сообщений в секунду",
                 template="plotly_white",
                 hovermode='x unified'
             )
             fig.add_annotation(
-                text="Резкое падение красной линии (DF17/18) при сохранении синей – признак подавления GNSS (jamming)",
+                text="Резкое падение красной линии (DF17/18) при сохранении синей – признак подавления GNSS (JAMMING)",
                 xref="paper", yref="paper", x=0.02, y=0.95, showarrow=False,
                 font=dict(size=11, color="gray"), bgcolor="white", bordercolor="lightgray", borderwidth=1
             )
