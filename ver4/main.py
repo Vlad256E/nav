@@ -255,7 +255,13 @@ if __name__ == '__main__':
                     course_data=data.icao_courses.get(icao, []),
                     alt_data=data.icao_altitude.get(icao, []),
                     nacp_data=data.icao_nacp.get(icao, []),
-                    messages=data.icao_messages.get(icao, [])
+                    messages=data.icao_messages.get(icao, []),
+                    gva_data=data.icao_gva.get(icao, []),           
+                    sil_data=data.icao_sil.get(icao, []),           
+                    nacv_data=data.icao_nacv.get(icao, []),         
+                    baro_corr_data=data.icao_baro_correction.get(icao, []),  
+                    gnss_alt_data=data.icao_gnss_altitude.get(icao, []),      
+                    sel_alt_data=data.icao_selected_altitude.get(icao, [])    
                 )
                 if anomalies:
                     icao_anomalies[icao] = anomalies

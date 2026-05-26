@@ -180,6 +180,26 @@ class IcaoGraphs:
             self._finalize_group(current_group, grouped)
         return grouped
 
+    def _get_anomaly_time_ranges(self, icao):
+        """возвращает список кортежей (start_ts, end_ts) для аномалий данного борта"""
+        if icao not in self.anomalies_dict:
+            return []
+        grouped = self._group_anomalies(self.anomalies_dict[icao])
+        return [(g['start'], g['end']) for g in grouped]
+
+    def _add_anomaly_vrects(self, fig, icao, xaxis_ref='x'):
+        """добавляет вертикальные красные прямоугольники на график по временным интервалам аномалий"""
+        ranges = self._get_anomaly_time_ranges(icao)
+        for start, end in ranges:
+            start_utc = timestamp_to_utc(start)
+            end_utc = timestamp_to_utc(end)
+            fig.add_vrect(
+                x0=start_utc, x1=end_utc,
+                fillcolor="red", opacity=0.2, layer="below", line_width=0,
+                annotation_text="аномалия", annotation_position="top left",
+                annotation_font_size=10, annotation_font_color="red"
+            )
+
     def _compute_ground_speed_from_positions(self, pos_data):
         """рассчитывает скорость по координатам (узлы) для каждой пары соседних точек"""
         if not pos_data or len(pos_data) < 2:
@@ -227,7 +247,8 @@ class IcaoGraphs:
                             {'label': 'Барометрический анализ', 'value': 'baro_analysis'},
                             {'label': 'Качество данных в % (HIL/HFOM/VFOM)', 'value': 'quality_percentages'},
                             {'label': 'Спуфинг-анализ: кинематика (GS vs скорость по координатам)', 'value': 'spoofing_kinematics'},
-                            {'label': 'Джамминг-анализ: активность пакетов (DF)', 'value': 'jamming_activity'}
+                            {'label': 'Джамминг-анализ: активность пакетов (DF)', 'value': 'jamming_activity'},
+                            {'label': 'Интенсивность сообщений (Message Rate) – Jamming', 'value': 'message_rate'}
                         ], value='track', style={'width': '300px'})
                     ]),
                     html.Div(id='mapbox-toggle-container', children=[
@@ -344,7 +365,7 @@ class IcaoGraphs:
 
             display_id = self.get_display_id(icao)
 
-            # режим nic_track (цветной трек)
+            # режим nic_track (цветной трек) с выделением аномальных сегментов
             if mode == 'nic_track':
                 pos_data = self.pos_dict.get(icao)
                 if not pos_data or len(pos_data) < 2:
@@ -353,83 +374,196 @@ class IcaoGraphs:
                 nic_data = self.nic_dict.get(icao, [])
                 pos_sorted = sorted(pos_data, key=lambda x: x[0])
                 use_mapbox = 'mapbox' in mapbox_toggle
-                points = [(lat, lon, t, self._get_closest_nic(t, nic_data)) for t, lat, lon in pos_sorted]
+                # подготовка точек с nic
+                points = [(t, lat, lon, self._get_closest_nic(t, nic_data)) for t, lat, lon in pos_sorted]
+                # интервалы аномалий
+                anomaly_ranges = self._get_anomaly_time_ranges(icao)
                 fig = go.Figure()
+                # функция для проверки принадлежности времени аномалии
+                def is_time_in_anomaly(t):
+                    for start, end in anomaly_ranges:
+                        if start <= t <= end:
+                            return True
+                    return False
+                # разбиваем на сегменты по цвету NIC и аномалиям
+                i = 0
+                while i < len(points) - 1:
+                    j = i + 1
+                    # определяем цвет по NIC для текущего сегмента
+                    current_nic_color = self._get_color_from_nic(points[i][3])
+                    # также проверяем, является ли сегмент аномальным (хотя бы одна точка)
+                    is_anomaly_segment = any(is_time_in_anomaly(points[k][0]) for k in range(i, j))
+                    while j < len(points):
+                        next_nic_color = self._get_color_from_nic(points[j][3])
+                        if next_nic_color == current_nic_color:
+                            j += 1
+                        else:
+                            break
+                    # цвет линии: если сегмент аномальный - красный, иначе цвет NIC
+                    line_color = 'red' if is_anomaly_segment else current_nic_color
+                    lats = [p[1] for p in points[i:j]]
+                    lons = [p[2] for p in points[i:j]]
+                    times_seg = [p[0] for p in points[i:j]]
+                    # hovertext
+                    hover_text = [f"время: {timestamp_to_utc(t).strftime('%H:%M:%S')}<br>nic: {nic}" for t,lat,lon,nic in points[i:j]]
+                    if use_mapbox:
+                        fig.add_trace(go.Scattermapbox(
+                            lat=lats, lon=lons, mode='lines',
+                            line=dict(width=3, color=line_color),
+                            hoverinfo='text', text=hover_text, showlegend=False
+                        ))
+                    else:
+                        fig.add_trace(go.Scatter(
+                            x=lons, y=lats, mode='lines',
+                            line=dict(width=3, color=line_color),
+                            hoverinfo='text', text=hover_text, showlegend=False
+                        ))
+                    i = j
+                # добавляем маркеры
+                for t, lat, lon, nic in points:
+                    color = self._get_color_from_nic(nic)
+                    if is_time_in_anomaly(t):
+                        color = 'red'
+                    hover = f"время: {timestamp_to_utc(t).strftime('%H:%M:%S')}<br>nic: {nic if nic is not None else 'нет данных'}"
+                    if use_mapbox:
+                        fig.add_trace(go.Scattermapbox(
+                            lat=[lat], lon=[lon], mode='markers',
+                            marker=dict(size=6, color=color),
+                            text=hover, hoverinfo='text', showlegend=False
+                        ))
+                    else:
+                        fig.add_trace(go.Scatter(
+                            x=[lon], y=[lat], mode='markers',
+                            marker=dict(size=6, color=color),
+                            text=hover, hoverinfo='text', showlegend=False
+                        ))
                 if use_mapbox:
-                    i = 0
-                    while i < len(points) - 1:
-                        j = i + 1
-                        current_color = self._get_color_from_nic(points[i][3])
-                        while j < len(points) and self._get_color_from_nic(points[j][3]) == current_color:
-                            j += 1
-                        lats, lons = [p[0] for p in points[i:j]], [p[1] for p in points[i:j]]
-                        fig.add_trace(go.Scattermapbox(lat=lats, lon=lons, mode='lines', line=dict(width=3, color=current_color), showlegend=False, hoverinfo='none'))
-                        i = j
-                    for lat, lon, t, nic in points:
-                        color = self._get_color_from_nic(nic)
-                        hover = f"время: {timestamp_to_utc(t).strftime('%H:%M:%S')}<br>nic: {nic if nic is not None else 'нет данных'}"
-                        fig.add_trace(go.Scattermapbox(lat=[lat], lon=[lon], mode='markers', marker=dict(size=6, color=color), text=hover, hoverinfo='text', showlegend=False))
-                    center = (sum(p[0] for p in points)/len(points), sum(p[1] for p in points)/len(points))
-                    fig.update_layout(title=f"трек борта {display_id} с цветовой индикацией nic", mapbox=dict(style="open-street-map", center=dict(lat=center[0], lon=center[1]), zoom=9), margin=dict(l=0, r=150, t=40, b=0), legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02))
+                    center = (sum(p[1] for p in points)/len(points), sum(p[2] for p in points)/len(points))
+                    fig.update_layout(
+                        title=f"трек борта {display_id} с цветовой индикацией nic (красный – аномалия)",
+                        mapbox=dict(style="open-street-map", center=dict(lat=center[0], lon=center[1]), zoom=9),
+                        margin=dict(l=0, r=150, t=40, b=0),
+                        legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02)
+                    )
                 else:
-                    i = 0
-                    while i < len(points) - 1:
-                        j = i + 1
-                        current_color = self._get_color_from_nic(points[i][3])
-                        while j < len(points) and self._get_color_from_nic(points[j][3]) == current_color:
-                            j += 1
-                        lons, lats = [p[1] for p in points[i:j]], [p[0] for p in points[i:j]]
-                        fig.add_trace(go.Scatter(x=lons, y=lats, mode='lines', line=dict(width=3, color=current_color), showlegend=False))
-                        i = j
-                    for lat, lon, t, nic in points:
-                        color = self._get_color_from_nic(nic)
-                        hover = f"время: {timestamp_to_utc(t).strftime('%H:%M:%S')}<br>nic: {nic if nic is not None else 'нет данных'}"
-                        fig.add_trace(go.Scatter(x=[lon], y=[lat], mode='markers', marker=dict(size=6, color=color), text=hover, hoverinfo='text', showlegend=False))
-                    fig.update_layout(title=f"трек борта {display_id} с цветовой индикацией nic", xaxis_title="долгота", yaxis_title="широта", yaxis=dict(scaleanchor="x", scaleratio=1), template="plotly_white", hovermode='closest', margin=dict(r=150), legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02))
+                    fig.update_layout(
+                        title=f"трек борта {display_id} с цветовой индикацией nic (красный – аномалия)",
+                        xaxis_title="долгота", yaxis_title="широта",
+                        yaxis=dict(scaleanchor="x", scaleratio=1),
+                        template="plotly_white", hovermode='closest', margin=dict(r=150),
+                        legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02)
+                    )
+                # легенда
                 for item in [go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color='green'), name='nic ≥ 10 (отлично)'),
                              go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color='orange'), name='nic 7–9 (средне)'),
-                             go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color='red'), name='nic ≤ 6 (низкое)'),
+                             go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color='red'), name='nic ≤ 6 или аномалия'),
                              go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color='lightgray'), name='nic нет данных')]:
                     fig.add_trace(item)
                 return fig, full_table, anomaly_rows, tables_style, mapbox_style
 
-            # режим общей карты
+            # режим общей карты с выделением аномальных сегментов
             if mode == 'track':
                 if not self.pos_dict:
                     return go.Figure().add_annotation(text="нет данных координат", showarrow=False), full_table, anomaly_rows, tables_style, mapbox_style
                 use_mapbox = 'mapbox' in mapbox_toggle
+                anomaly_ranges = self._get_anomaly_time_ranges(icao)
+                def is_time_in_anomaly(t):
+                    for start, end in anomaly_ranges:
+                        if start <= t <= end:
+                            return True
+                    return False
                 if use_mapbox:
                     fig = go.Figure()
+                    # другие борта
                     for track_icao, track_data in self.pos_dict.items():
                         if track_icao not in self.icao_list or track_icao == icao:
                             continue
-                        lats, lons = [lat for t, lat, lon in track_data], [lon for t, lat, lon in track_data]
-                        fig.add_trace(go.Scattermapbox(lat=lats, lon=lons, mode='lines', line=dict(width=2, color='#a0a0a0'), opacity=0.8, hoverinfo='text', text=[f"борт: {track_icao}"]*len(lons), showlegend=False))
+                        lats = [lat for t, lat, lon in track_data]
+                        lons = [lon for t, lat, lon in track_data]
+                        fig.add_trace(go.Scattermapbox(
+                            lat=lats, lon=lons, mode='lines', line=dict(width=2, color='#a0a0a0'),
+                            opacity=0.8, hoverinfo='text', text=[f"борт: {track_icao}"]*len(lons), showlegend=False
+                        ))
+                    # текущий борт с разбивкой на аномальные/нормальные сегменты
                     curr_data = self.pos_dict.get(icao)
                     if curr_data:
-                        lats, lons = [lat for t, lat, lon in curr_data], [lon for t, lat, lon in curr_data]
-                        times = [timestamp_to_utc(t).strftime('%H:%M:%S') for t, lat, lon in curr_data]
-                        fig.add_trace(go.Scattermapbox(lat=lats, lon=lons, mode='lines+markers', marker=dict(size=6, color='#d62728'), line=dict(width=3, color='#d62728'), text=times, name=display_id))
+                        curr_sorted = sorted(curr_data, key=lambda x: x[0])
+                        i = 0
+                        while i < len(curr_sorted) - 1:
+                            j = i + 1
+                            # определяем, является ли сегмент аномальным (хотя бы одна точка)
+                            is_anomaly = any(is_time_in_anomaly(curr_sorted[k][0]) for k in range(i, j))
+                            while j < len(curr_sorted):
+                                # проверяем, не изменился ли статус аномальности на следующей точке
+                                next_anomaly = any(is_time_in_anomaly(curr_sorted[j][0]) for kk in [j])
+                                if next_anomaly == is_anomaly:
+                                    j += 1
+                                else:
+                                    break
+                            lats = [lat for t, lat, lon in curr_sorted[i:j]]
+                            lons = [lon for t, lat, lon in curr_sorted[i:j]]
+                            times = [timestamp_to_utc(t).strftime('%H:%M:%S') for t, lat, lon in curr_sorted[i:j]]
+                            line_color = 'red' if is_anomaly else '#d62728'
+                            fig.add_trace(go.Scattermapbox(
+                                lat=lats, lon=lons, mode='lines+markers',
+                                marker=dict(size=6, color=line_color),
+                                line=dict(width=3, color=line_color),
+                                text=times, name=display_id if not is_anomaly else f"{display_id} (аномалия)"
+                            ))
+                            i = j
                     all_lats = [lat for tdata in self.pos_dict.values() for t, lat, lon in tdata]
                     all_lons = [lon for tdata in self.pos_dict.values() for t, lat, lon in tdata]
                     center_lat, center_lon = sum(all_lats)/len(all_lats), sum(all_lons)/len(all_lons)
-                    fig.update_layout(title="общая карта (все обнаруженные треки) — реальная карта", mapbox=dict(style="open-street-map", center=dict(lat=center_lat, lon=center_lon), zoom=8), margin=dict(l=0, r=0, t=40, b=0), legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99), modebar=dict(orientation='v'))
+                    fig.update_layout(
+                        title="общая карта (все обнаруженные треки) — реальная карта, красный – аномалия",
+                        mapbox=dict(style="open-street-map", center=dict(lat=center_lat, lon=center_lon), zoom=8),
+                        margin=dict(l=0, r=0, t=40, b=0),
+                        legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
+                        modebar=dict(orientation='v')
+                    )
                 else:
                     fig = go.Figure()
+                    # другие борта
                     for track_icao, track_data in self.pos_dict.items():
                         if track_icao not in self.icao_list or track_icao == icao:
                             continue
-                        lats, lons = [lat for t, lat, lon in track_data], [lon for t, lat, lon in track_data]
-                        fig.add_trace(go.Scatter(x=lons, y=lats, mode='lines', line=dict(width=2, color='#a0a0a0'), opacity=0.8, hoverinfo='text', text=[f"борт: {track_icao}"]*len(lons), showlegend=False))
+                        lats = [lat for t, lat, lon in track_data]
+                        lons = [lon for t, lat, lon in track_data]
+                        fig.add_trace(go.Scatter(
+                            x=lons, y=lats, mode='lines', line=dict(width=2, color='#a0a0a0'),
+                            opacity=0.8, hoverinfo='text', text=[f"борт: {track_icao}"]*len(lons), showlegend=False
+                        ))
+                    # текущий борт с разбивкой
                     curr_data = self.pos_dict.get(icao)
                     if curr_data:
-                        lats, lons = [lat for t, lat, lon in curr_data], [lon for t, lat, lon in curr_data]
-                        times = [timestamp_to_utc(t).strftime('%H:%M:%S') for t, lat, lon in curr_data]
-                        fig.add_trace(go.Scatter(x=lons, y=lats, mode='lines+markers', marker=dict(size=5, color='#d62728'), line=dict(width=3, color='#d62728'), text=times, name=display_id))
-                    fig.update_layout(title="общая карта (все обнаруженные треки)", xaxis_title="долгота", yaxis_title="широта", yaxis=dict(scaleanchor="x", scaleratio=1), template="plotly_white", hovermode='closest')
+                        curr_sorted = sorted(curr_data, key=lambda x: x[0])
+                        i = 0
+                        while i < len(curr_sorted) - 1:
+                            j = i + 1
+                            is_anomaly = any(is_time_in_anomaly(curr_sorted[k][0]) for k in range(i, j))
+                            while j < len(curr_sorted):
+                                next_anomaly = any(is_time_in_anomaly(curr_sorted[j][0]) for kk in [j])
+                                if next_anomaly == is_anomaly:
+                                    j += 1
+                                else:
+                                    break
+                            lats = [lat for t, lat, lon in curr_sorted[i:j]]
+                            lons = [lon for t, lat, lon in curr_sorted[i:j]]
+                            times = [timestamp_to_utc(t).strftime('%H:%M:%S') for t, lat, lon in curr_sorted[i:j]]
+                            line_color = 'red' if is_anomaly else '#d62728'
+                            fig.add_trace(go.Scatter(
+                                x=lons, y=lats, mode='lines+markers', marker=dict(size=5, color=line_color),
+                                line=dict(width=3, color=line_color), text=times, name=display_id if not is_anomaly else f"{display_id} (аномалия)"
+                            ))
+                            i = j
+                    fig.update_layout(
+                        title="общая карта (все обнаруженные треки), красный – аномалия",
+                        xaxis_title="долгота", yaxis_title="широта", yaxis=dict(scaleanchor="x", scaleratio=1),
+                        template="plotly_white", hovermode='closest'
+                    )
                 return fig, full_table, anomaly_rows, tables_style, mapbox_style
 
-            # остальные режимы строятся через _build_normal_figure
+            # остальные режимы строятся через _build_normal_figure (с добавлением vrect)
             fig = self._build_normal_figure(icao, mode, display_id)
             return fig, full_table, anomaly_rows, tables_style, mapbox_style
 
@@ -476,6 +610,7 @@ class IcaoGraphs:
                 fig.add_trace(go.Scatter(x=times, y=vals, mode='lines+markers', name='курс', marker=dict(size=4, color='purple')), row=3, col=1)
             fig.update_yaxes(range=[-10, 370], tickvals=[0,90,180,270,360], row=3, col=1)
             fig.update_layout(title=f"кинематика полета: {display_id}", template="plotly_white", hovermode='x unified')
+            self._add_anomaly_vrects(fig, icao)
             return fig
 
         # категории целостности и точности
@@ -500,6 +635,7 @@ class IcaoGraphs:
             fig.update_yaxes(range=[0,12], tickvals=list(range(0,13,2)), row=2, col=1)
             fig.update_yaxes(range=[0,4], tickvals=list(range(0,5)), row=3, col=1)
             fig.update_layout(title=f"категории качества сигналов: {display_id}", template="plotly_white", hovermode='x unified')
+            self._add_anomaly_vrects(fig, icao)
             return fig
 
         # метрики в метрах (hil, hfom, vfom)
@@ -524,6 +660,7 @@ class IcaoGraphs:
             add_metric(self.nacp_dict, NACP_TO_HFOM, "hfom ≥ 18.52 км", 2, 'blue')
             add_metric(self.gva_dict, GVA_TO_VFOM, "неизвестно или ≥10 м/с", 3, 'green')
             fig.update_layout(height=800, title_text=f"параметры точности: {display_id}", template="plotly_white")
+            self._add_anomaly_vrects(fig, icao)
             return fig
 
         # барометрический анализ
@@ -537,6 +674,7 @@ class IcaoGraphs:
             if times:
                 fig.add_trace(go.Scatter(x=times, y=vals, mode='lines+markers', name='давление', marker=dict(size=4, color='brown')), row=2, col=1)
             fig.update_layout(title=f"барометрический анализ: {display_id}", template="plotly_white", hovermode='x unified')
+            self._add_anomaly_vrects(fig, icao)
             return fig
 
         # проценты качества
@@ -556,9 +694,10 @@ class IcaoGraphs:
                 fig.add_trace(go.Scatter(x=times, y=percent_vals, mode='lines+markers', name='vfom (%)', line=dict(color='purple', width=2, dash='dash')))
             fig.update_layout(title=f"качество данных в процентах: {display_id}", yaxis_title="качество (%)", yaxis_range=[-5, 105], template="plotly_white", hovermode='x unified')
             fig.add_annotation(text="hil: <7.5м → 37км\nhfom: <3м → >18.5км\nvfom: ≤45м → ≥150м", xref="paper", yref="paper", x=0.02, y=0.05, showarrow=False, font=dict(size=10), bgcolor="white", bordercolor="gray", borderwidth=1)
+            self._add_anomaly_vrects(fig, icao)
             return fig
 
-        # новый режим: спуфинг-анализ, сравнение скоростей
+        # спуфинг-анализ, сравнение скоростей
         if mode == 'spoofing_kinematics':
             fig = go.Figure()
             times, gs_vals = self.get_times_values(self.spd_dict.get(icao))
@@ -572,9 +711,10 @@ class IcaoGraphs:
                     calc_times_utc = [timestamp_to_utc(t) for t in calc_times]
                     fig.add_trace(go.Scatter(x=calc_times_utc, y=calc_vals, mode='lines+markers', name='скорость по координатам (узлы)', line=dict(color='red', width=2, dash='dash'), marker=dict(size=4)))
             fig.update_layout(title=f"сравнение скоростей (спуфинг-анализ): {display_id}", xaxis_title="время (utc)", yaxis_title="скорость (узлы)", template="plotly_white", hovermode='x unified')
+            self._add_anomaly_vrects(fig, icao)
             return fig
 
-        # новый режим: джамминг-анализ, активность пакетов df
+        # джамминг-анализ: активность пакетов df
         if mode == 'jamming_activity':
             messages = self.messages_dict.get(icao, [])
             if not messages:
@@ -605,6 +745,50 @@ class IcaoGraphs:
                 template="plotly_white",
                 hovermode='closest'
             )
+            self._add_anomaly_vrects(fig, icao)
+            return fig
+
+        # интенсивность сообщений (Message Rate)
+        if mode == 'message_rate':
+            messages = self.messages_dict.get(icao, [])
+            if not messages:
+                fig = go.Figure().add_annotation(text="нет данных о сообщениях", showarrow=False)
+                return fig
+            messages_sorted = sorted(messages, key=lambda x: x[0])
+            timestamps = [ts for ts, _ in messages_sorted]
+            start_time = timestamps[0]
+            end_time = timestamps[-1]
+            bin_width = 1.0
+            bins = np.arange(start_time, end_time + bin_width, bin_width)
+            hist_total, _ = np.histogram(timestamps, bins=bins)
+            coord_timestamps = [ts for ts, df in messages_sorted if df in (17, 18)]
+            hist_coord, _ = np.histogram(coord_timestamps, bins=bins)
+            bin_centers = (bins[:-1] + bins[1:]) / 2
+            bin_centers_utc = [timestamp_to_utc(bc) for bc in bin_centers]
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=bin_centers_utc, y=hist_total,
+                mode='lines+markers', name='Все сообщения (1/сек)',
+                line=dict(color='blue', width=2), marker=dict(size=4)
+            ))
+            fig.add_trace(go.Scatter(
+                x=bin_centers_utc, y=hist_coord,
+                mode='lines+markers', name='DF17+18 (координаты)',
+                line=dict(color='red', width=2, dash='dash'), marker=dict(size=4)
+            ))
+            fig.update_layout(
+                title=f"Интенсивность сообщений (Message Rate) – {display_id}",
+                xaxis_title="время (UTC)",
+                yaxis_title="Сообщений в секунду",
+                template="plotly_white",
+                hovermode='x unified'
+            )
+            fig.add_annotation(
+                text="Резкое падение красной линии (DF17/18) при сохранении синей – признак подавления GNSS (jamming)",
+                xref="paper", yref="paper", x=0.02, y=0.95, showarrow=False,
+                font=dict(size=11, color="gray"), bgcolor="white", bordercolor="lightgray", borderwidth=1
+            )
+            self._add_anomaly_vrects(fig, icao)
             return fig
 
         # если режим не распознан
