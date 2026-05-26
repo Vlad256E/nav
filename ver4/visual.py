@@ -544,7 +544,6 @@ class IcaoGraphs:
                             lats = [lat for t, lat, lon in curr_sorted[i:j]]
                             lons = [lon for t, lat, lon in curr_sorted[i:j]]
                             times = [timestamp_to_utc(t).strftime('%H:%M:%S') for t, lat, lon in curr_sorted[i:j]]
-                            # цвет: красный для аномалии, синий для нормы
                             line_color = 'red' if is_anomaly else '#1f77b4'
                             name = display_id if not is_anomaly else f"{display_id} (АНОМАЛИЯ)"
                             fig.add_trace(go.Scattermapbox(
@@ -722,11 +721,22 @@ class IcaoGraphs:
             times, vals = self.get_times_values(self.alt_diff_dict.get(icao))
             if times:
                 fig.add_trace(go.Scatter(x=times, y=vals, mode='lines+markers', name='разница (фт)', marker=dict(size=4, color='red')), row=1, col=1)
-                fig.add_hline(y=0, line_dash="dash", line_color="gray", row=1, col=1)
+                # Добавляем пороговые линии для выявления спуфинга высоты
+                fig.add_hline(y=500, line_dash="dash", line_color="orange", opacity=0.8, row=1, col=1,
+                              annotation_text="Порог +500 фт", annotation_position="bottom right")
+                fig.add_hline(y=-500, line_dash="dash", line_color="orange", opacity=0.8, row=1, col=1,
+                              annotation_text="Порог -500 фт", annotation_position="top right")
+                fig.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.5, row=1, col=1)
+                # Добавляем поясняющую аннотацию о спуфинге высоты
+                fig.add_annotation(
+                    text="Выход за пределы ±500 фт при стабильной барокоррекции – признак спуфинга высоты",
+                    xref="paper", yref="paper", x=0.02, y=0.95, showarrow=False,
+                    font=dict(size=10, color="darkred"), bgcolor="rgba(255,200,200,0.8)", bordercolor="red", borderwidth=1
+                )
             times, vals = self.get_times_values(self.baro_correction_dict.get(icao))
             if times:
                 fig.add_trace(go.Scatter(x=times, y=vals, mode='lines+markers', name='давление', marker=dict(size=4, color='brown')), row=2, col=1)
-            fig.update_layout(title=dict(text=f"БАРОМЕТРИЧЕСКИЙ АНАЛИЗ: {display_id}", x=0.5, xanchor='center'), template="plotly_white", hovermode='x unified')
+            fig.update_layout(title=dict(text=f"БАРОМЕТРИЧЕСКИЙ АНАЛИЗ (ВЫЯВЛЕНИЕ СПУФИНГА ВЫСОТЫ): {display_id}", x=0.5, xanchor='center'), template="plotly_white", hovermode='x unified')
             self._add_anomaly_vrects(fig, icao)
             return fig
 
