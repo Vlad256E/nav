@@ -255,7 +255,7 @@ class IcaoGraphs:
                     html.Div([
                         html.Label("Режим экрана:", style={'fontWeight': 'bold', 'marginBottom': '5px', 'display': 'block'}),
                         dcc.Dropdown(id='mode-dropdown', options=[
-                            {'label': 'Схема трека (2D карта)', 'value': 'track'},
+                            {'label': 'Схема трека', 'value': 'track'},
                             {'label': 'Трек борта с качеством NIC', 'value': 'nic_track'},
                             {'label': 'Кинематика (высота, скорость, курс)', 'value': 'kinematics'},
                             {'label': 'Категории целостности (NIC/SIL, NAC)', 'value': 'integrity_and_accuracy'},
@@ -264,7 +264,7 @@ class IcaoGraphs:
                             {'label': 'Качество данных в % (HIL/HFOM/VFOM)', 'value': 'quality_percentages'},
                             {'label': 'Спуфинг-анализ: кинематика (GS vs скорость по координатам)', 'value': 'spoofing_kinematics'},
                             {'label': 'Джамминг-анализ: активность пакетов (DF)', 'value': 'jamming_activity'},
-                            {'label': 'Интенсивность сообщений (Message Rate) – Jamming', 'value': 'message_rate'}
+                            {'label': 'Интенсивность сообщений – Jamming', 'value': 'message_rate'}
                         ], value='track', style={'width': '300px'})
                     ]),
                     html.Div(id='mapbox-toggle-container', style={'marginBottom': '0'}, children=[
