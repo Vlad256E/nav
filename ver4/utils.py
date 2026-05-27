@@ -307,38 +307,44 @@ class AnomalyDetector:
 
     def _compute_altitude_spoofing_scores(self, df):
         """
-        Оценивает аномальность разницы высот GNSS - Baro с учётом барокоррекции (QNH).
-        Если барокоррекция известна, корректируем ожидаемую разницу.
+        Корректировка оценки аномалий высоты с учетом барокоррекции (QNH) 
+        и естественного температурного отклонения (D-Value) на больших высотах.
         """
         scores = pd.Series(0.0, index=df.index)
-        if 'alt_diff' not in df.columns:
+        
+        if 'altitude_difference' not in df.columns:
             return scores
 
-        # Для каждой точки, где есть alt_diff
-        for ts, alt_diff in df['alt_diff'].dropna().items():
-            # Ищем ближайшую барокоррекцию по времени (в окне ±30 сек)
-            if 'baro_corr' in df.columns:
-                mask = (df.index >= ts - 30) & (df.index <= ts + 30)
-                baro_candidates = df.loc[mask, 'baro_corr'].dropna()
-                if not baro_candidates.empty:
-                    # Берём ближайшую по времени
-                    closest_ts = baro_candidates.index[np.argmin(np.abs(baro_candidates.index - ts))]
-                    qnh = baro_candidates.loc[closest_ts]
-                    # Коррекция: отклонение QNH от стандарта даёт смещение барометрической высоты
-                    # При QNH > 1013.25 барометрическая высота занижается (самолёт кажется ниже)
-                    # Поэтому разница (GNSS - Baro) должна быть уменьшена на коррекцию.
-                    # Ожидаемая разница при идеальных условиях ~ 0, но с учётом QNH:
-                    expected_offset = (self.qnh_std_hpa - qnh) * self.qnh_correction_factor
-                    adjusted_diff = alt_diff - expected_offset
-                else:
-                    adjusted_diff = alt_diff
+        for idx, row in df.iterrows():
+            alt_diff = row.get('altitude_difference')
+            baro_corr = row.get('baro_correction')
+            alt = row.get('altitude', 0)
+            
+            # Пропускаем пустые строки, чтобы избежать ложных срабатываний из-за NaN
+            if pd.isna(alt_diff) or pd.isna(alt):
+                continue
+                
+            # 1. Динамический порог (D-Value)
+            # На больших высотах разница из-за плотности воздуха растет (~8% от высоты).
+            # Берем базовый порог 1000 футов ИЛИ 8% от текущей высоты (что больше).
+            threshold = max(1000.0, alt * 0.08)
+
+            # 2. Корректировка по давлению (QNH) для высот ниже эшелона перехода (обычно < 18000 ft)
+            # Проверяем, что данные о давлении существуют и они адекватны (> 800 гПа)
+            if alt < 18000 and not pd.isna(baro_corr) and baro_corr > 800 and baro_corr != 1013.25:
+                # Ожидаемый сдвиг с учетом знака (GNSS - Baro = (QNH - 1013.25) * 30)
+                expected_diff = (baro_corr - 1013.25) * 30
+                
+                # Насколько реальная разница отличается от ожидаемой физической
+                residual = abs(alt_diff - expected_diff)
+                
+                if residual > threshold:
+                    scores[idx] = 1.0
             else:
-                adjusted_diff = alt_diff
-
-            # Если скорректированная разница превышает порог, добавляем вес
-            if abs(adjusted_diff) > self.alt_diff_threshold_ft:
-                scores.loc[ts] += self.weight_alt_diff_spoof
-
+                # Для больших высот (стандартное давление) или если пилот не передал QNH
+                if abs(alt_diff) > threshold:
+                    scores[idx] = 1.0
+                    
         return scores
 
     def _aggregate_anomalies(self, total_score, df, min_duration_sec):
