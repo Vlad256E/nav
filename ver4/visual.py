@@ -858,7 +858,7 @@ class IcaoGraphs:
                 line=dict(color='red', width=2, dash='dash'), marker=dict(size=4)
             ))
             fig.update_layout(
-                title=dict(text=f"ИНТЕНСИВНОСТЬ СООБЩЕНИЙ (MESSAGE RATE): {display_id}", x=0.5, xanchor='center'),
+                title=dict(text=f"ИНТЕНСИВНОСТЬ СООБЩЕНИЙ: {display_id}", x=0.5, xanchor='center'),
                 xaxis_title="время (UTC)",
                 yaxis_title="сообщений в секунду",
                 template="plotly_white",
