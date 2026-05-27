@@ -3,9 +3,10 @@ from plotly.subplots import make_subplots
 import dash
 from dash import dcc, html, Input, Output, State, dash_table
 import numpy as np
+import pandas as pd
+from datetime import datetime, timezone
 
 from utils import timestamp_to_utc, format_timestamp_with_nanoseconds
-
 
 # словари для преобразования категорий в метры и проценты
 NIC_TO_HIL = {
@@ -120,72 +121,63 @@ class IcaoGraphs:
             ]
         )
 
-    def _finalize_group(self, group, grouped):
-        """завершает группу аномалий и добавляет в список grouped"""
-        if group['type'] == 'SPOOFING':
-            avg_diff = sum(group['values']) / len(group['values']) if group['values'] else 0
-            desc = f"аномальная разница высот: с {format_timestamp_with_nanoseconds(group['start_time'])} по {format_timestamp_with_nanoseconds(group['end_time'])} (средняя разница {avg_diff:.0f} фт)"
-        else:
-            desc = f"падение nic: с {format_timestamp_with_nanoseconds(group['start_time'])} по {format_timestamp_with_nanoseconds(group['end_time'])}"
-        grouped.append({
-            'type': group['type'],
-            'desc': desc,
-            'start': group['start_time'],
-            'end': group['end_time']
-        })
-
-    def _group_anomalies(self, anomalies):
-        if not anomalies:
-            return []
-        grouped = []
-        current_group = None
-        for a in anomalies:
-            if current_group is None:
-                current_group = {
-                    'type': a['type'],
-                    'start_time': a['time'],
-                    'end_time': a['time'],
-                    'desc_list': [a['desc']],
-                    'values': []
-                }
-                if a['type'] == 'SPOOFING':
-                    import re
-                    match = re.search(r'(\d+) фт', a['desc'])
-                    if match:
-                        current_group['values'].append(int(match.group(1)))
-            else:
-                if current_group['type'] == a['type'] and (a['time'] - current_group['end_time']) <= 10:
-                    current_group['end_time'] = a['time']
-                    current_group['desc_list'].append(a['desc'])
-                    if a['type'] == 'SPOOFING':
-                        import re
-                        match = re.search(r'(\d+) фт', a['desc'])
-                        if match:
-                            current_group['values'].append(int(match.group(1)))
-                else:
-                    self._finalize_group(current_group, grouped)
-                    current_group = {
-                        'type': a['type'],
-                        'start_time': a['time'],
-                        'end_time': a['time'],
-                        'desc_list': [a['desc']],
-                        'values': []
-                    }
-                    if a['type'] == 'SPOOFING':
-                        import re
-                        match = re.search(r'(\d+) фт', a['desc'])
-                        if match:
-                            current_group['values'].append(int(match.group(1)))
-        if current_group:
-            self._finalize_group(current_group, grouped)
-        return grouped
+    def get_table_dataframe(self):
+        rows = []
+        for icao in self.icao_list:
+            callsign = self.icao_callsigns.get(icao, "N/A")
+            alt_data = self.alt_dict.get(icao, [[0, 0]])
+            spd_data = self.spd_dict.get(icao, [[0, 0]])
+            alt = alt_data[-1][1] if alt_data else 0
+            spd = spd_data[-1][1] if spd_data else 0
+            status_text = "аномалия" if icao in self.anomalies_dict else "норма"
+            rows.append({
+                "ICAO": icao,
+                "Позывной": callsign,
+                "Высота (фт)": int(alt),
+                "Скорость (уз)": int(spd),
+                "Статус": status_text
+            })
+        return pd.DataFrame(rows)
 
     def _get_anomaly_time_ranges(self, icao):
         """возвращает список кортежей (start_ts, end_ts) для аномалий данного борта"""
         if icao not in self.anomalies_dict:
             return []
-        grouped = self._group_anomalies(self.anomalies_dict[icao])
-        return [(g['start'], g['end']) for g in grouped]
+        return [(anom['start'], anom['end']) for anom in self.anomalies_dict[icao]]
+
+    def _group_anomalies(self, anomalies):
+        """объединяет пересекающиеся/близкие аномалии (для совместимости)"""
+        if not anomalies:
+            return []
+        sorted_anom = sorted(anomalies, key=lambda x: x['start'])
+        grouped = []
+        cur = sorted_anom[0].copy()
+        for anom in sorted_anom[1:]:
+            if anom['start'] - cur['end'] <= 10.0:
+                cur['end'] = max(cur['end'], anom['end'])
+                cur['desc_list'] = cur.get('desc_list', [cur['desc']]) + [anom['desc']]
+            else:
+                grouped.append(cur)
+                cur = anom.copy()
+        grouped.append(cur)
+        result = []
+        for g in grouped:
+            desc = g['desc']
+            if g['type'] == 'SPOOFING':
+                avg_diff = sum(g.get('values', [])) / len(g.get('values', [1])) if g.get('values') else 0
+                desc = f"аномальная разница высот: с {self._format_sec(g['start'])} по {self._format_sec(g['end'])} (средняя разница {avg_diff:.0f} фт)"
+            result.append({
+                'type': g['type'],
+                'desc': desc,
+                'start': g['start'],
+                'end': g['end']
+            })
+        return result
+
+    @staticmethod
+    def _format_sec(ts):
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        return dt.strftime('%Y-%m-%d %H:%M:%S')
 
     def _get_anomaly_description(self, icao):
         """возвращает человекочитаемое описание статуса аномалии для бейджа"""
@@ -194,7 +186,6 @@ class IcaoGraphs:
         grouped = self._group_anomalies(self.anomalies_dict[icao])
         if not grouped:
             return "ГНСС стабильна", "normal"
-        # Собираем уникальные типы
         types = set()
         for g in grouped:
             types.add(g['type'])
@@ -206,7 +197,6 @@ class IcaoGraphs:
             return "ВНИМАНИЕ: Обнаружено подавление сигнала", "critical"
         if 'MULTIFACTOR' in types:
             return "ВНИМАНИЕ: Комплексная аномалия навигации", "critical"
-        # fallback
         return "Обнаружена аномалия", "critical"
 
     def _add_anomaly_vrects(self, fig, icao, xaxis_ref='x'):
@@ -288,6 +278,8 @@ class IcaoGraphs:
                 html.Div(id='tables-container', style={'display': 'flex', 'gap': '20px', 'marginTop': '20px'}, children=[
                     html.Div(style={'flex': '1', 'backgroundColor': '#ffffff', 'borderRadius': '10px', 'padding': '15px', 'boxShadow': '0 2px 4px rgba(0,0,0,0.1)'}, children=[
                         html.H3("Сводная информация по всем бортам", style={'textAlign': 'center'}),
+                        html.Button("Скачать таблицу (XLSX)", id="export-btn", n_clicks=0, style={'marginBottom': '10px'}),
+                        dcc.Download(id="download-xlsx"),
                         html.Div(id='table-container')
                     ]),
                     html.Div(style={'flex': '1', 'backgroundColor': '#ffffff', 'borderRadius': '10px', 'padding': '15px', 'boxShadow': '0 2px 4px rgba(0,0,0,0.1)'}, children=[
@@ -297,19 +289,13 @@ class IcaoGraphs:
                             columns=[
                                 {'name': 'Период (UTC)', 'id': 'period'},
                                 {'name': 'Тип', 'id': 'type'},
-                                {'name': 'Уровень', 'id': 'severity'},
                                 {'name': 'Описание', 'id': 'description'}
                             ],
                             data=[],
+                            # toggle_columns=False,  # удалено — этот параметр не поддерживается в вашей версии
                             style_cell={'textAlign': 'left', 'padding': '8px'},
                             style_header={'backgroundColor': '#f1f1f1', 'fontWeight': 'bold'},
-                            style_data_conditional=[
-                                {'if': {'filter_query': '{severity} eq "critical"'}, 'backgroundColor': '#ffcccc', 'color': '#a00'},
-                                {'if': {'filter_query': '{severity} eq "high"'}, 'backgroundColor': '#ffe0b3', 'color': '#c60'},
-                                {'if': {'filter_query': '{severity} eq "warning"'}, 'backgroundColor': '#ffffcc', 'color': '#aa0'},
-                            ],
                             row_selectable=False,
-                            active_cell=None,
                             hidden_columns=['start_ts', 'end_ts']
                         )
                     ])
@@ -389,14 +375,21 @@ class IcaoGraphs:
             # подготовка данных для таблицы аномалий
             anomaly_rows = []
             if icao and icao in self.anomalies_dict:
+                type_map = {
+                    'MULTIFACTOR': 'Мультифакторная',
+                    'SPOOFING': 'Спуфинг',
+                    'JAMMING': 'Подавление сигнала'
+                }
                 for anom in self.anomalies_dict[icao]:
-                    start_ts = anom['time']
-                    end_ts = start_ts
-                    severity = anom.get('severity', 'info')
+                    start_ts = anom['start']
+                    end_ts = anom['end']
+                    start_str = datetime.fromtimestamp(start_ts, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                    end_str = datetime.fromtimestamp(end_ts, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                    period = f"{start_str} – {end_str}" if end_ts > start_ts else start_str
+                    anom_type = type_map.get(anom['type'], anom['type'])
                     anomaly_rows.append({
-                        'period': format_timestamp_with_nanoseconds(start_ts),
-                        'type': anom['type'],
-                        'severity': severity,
+                        'period': period,
+                        'type': anom_type,
                         'description': anom['desc'],
                         'start_ts': start_ts,
                         'end_ts': end_ts
@@ -640,6 +633,31 @@ class IcaoGraphs:
                 end_utc = timestamp_to_utc(end_ts)
                 return {'xaxis.range': [start_utc, end_utc]}
             return {}
+
+        # callback для экспорта в Excel
+        @self.app.callback(
+            Output("download-xlsx", "data"),
+            Input("export-btn", "n_clicks"),
+            prevent_initial_call=True
+        )
+        def export_to_excel(n_clicks):
+            try:
+                df = self.get_table_dataframe()
+                if df.empty:
+                    # Если данных нет, создаём файл с пояснением
+                    df = pd.DataFrame({"Сообщение": ["Нет данных для экспорта"]})
+                return dcc.send_data_frame(
+                    df.to_excel,
+                    "aircraft_data.xlsx",
+                    sheet_name="Сводка",
+                    index=False,
+                    engine='openpyxl'   # явно указываем движок
+                )
+            except Exception as e:
+                print(f"Ошибка экспорта Excel: {e}")
+                # Чтобы не оставлять пользователя без реакции, можно вернуть пустой дамп
+                # Но в данном случае лучше выбросить исключение, чтобы увидеть в консоли
+                raise
 
     def _build_normal_figure(self, icao, mode, display_id):
         # режим кинематики

@@ -312,13 +312,13 @@ class AnomalyDetector:
         """
         scores = pd.Series(0.0, index=df.index)
         
-        if 'altitude_difference' not in df.columns:
+        if 'alt_diff' not in df.columns:
             return scores
 
         for idx, row in df.iterrows():
-            alt_diff = row.get('altitude_difference')
-            baro_corr = row.get('baro_correction')
-            alt = row.get('altitude', 0)
+            alt_diff = row.get('alt_diff')
+            baro_corr = row.get('baro_corr')
+            alt = row.get('alt', 0)
             
             # Пропускаем пустые строки, чтобы избежать ложных срабатываний из-за NaN
             if pd.isna(alt_diff) or pd.isna(alt):
@@ -339,11 +339,11 @@ class AnomalyDetector:
                 residual = abs(alt_diff - expected_diff)
                 
                 if residual > threshold:
-                    scores[idx] = 1.0
+                    scores.loc[idx] = 1.0
             else:
                 # Для больших высот (стандартное давление) или если пилот не передал QNH
                 if abs(alt_diff) > threshold:
-                    scores[idx] = 1.0
+                    scores.loc[idx] = 1.0
                     
         return scores
 
@@ -370,10 +370,9 @@ class AnomalyDetector:
             duration = end - start
             if duration >= min_duration_sec:
                 scores_slice = total_score.loc[start:end]
-                # Определяем доминирующий тип аномалии по максимальному весу
-                # Для простоты оставляем MULTIFACTOR, но можно детализировать
                 anomalies.append({
-                    'time': start,
+                    'start': start,
+                    'end': end,
                     'type': 'MULTIFACTOR',
                     'severity': 'critical',
                     'desc': f'комплексная аномалия (суммарный вес {scores_slice.mean():.1f}) длительностью {duration:.1f} с'
@@ -421,6 +420,8 @@ class AnomalyDetector:
                              .add(score_drop, fill_value=0) \
                              .add(score_toa, fill_value=0) \
                              .add(score_alt_spoof, fill_value=0)
+
+        total_score = total_score.rolling(window=3, center=True, min_periods=1).median()
 
         anomalies = self._aggregate_anomalies(total_score, df, self.min_duration)
         return anomalies
